@@ -1,0 +1,57 @@
+# Docker Compose deployment for the DeepSeek Harness Web UI image.
+#
+#   cp .env.example .env      # then set DEEPSEEK_API_KEY
+#   docker compose -f docker/docker-compose.yml up -d --build
+#
+# The image is built from the repository root (the parent of this directory).
+
+name: deepseek-harness
+
+services:
+  dsh-web:
+    image: ${DSH_IMAGE:-deepseek-harness-web:0.2.1-alpha.1}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        # Optional apt mirror root, e.g. https://mirrors.tuna.tsinghua.edu.cn
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-}
+        # Optional Python requirements bake (path inside the repository).
+        PYTHON_REQUIREMENTS: ${PYTHON_REQUIREMENTS:-}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        PYTHON_EXTRA_PACKAGES: ${PYTHON_EXTRA_PACKAGES:-}
+    container_name: ${DSH_CONTAINER_NAME:-dsh-web}
+    restart: unless-stopped
+    ports:
+      # HOST:CONTAINER — change the host port if 3080 is taken.
+      - "${DSH_HOST_PORT:-3080}:${DSH_EXPOSE_PORT:-3080}"
+    environment:
+      # The pass-through list form omits a variable that is unset, instead of
+      # exporting it as an empty string. That matters here: the harness reads
+      # DEEPSEEK_BASE_URL through its launch environment at boot and parses it
+      # with `new URL()`, so an exported empty value fails the whole boot.
+      - DEEPSEEK_API_KEY
+      - DEEPSEEK_BASE_URL
+      # Advertised URL printed at startup; set it to the address you browse to,
+      # e.g. DSH_PUBLIC_URL=http://192.168.1.50:3080
+      - DSH_PUBLIC_URL
+      - DSH_PUBLIC_HOST
+      # Only useful together with docker-compose.python.yml, which mounts it.
+      - DSH_PYTHON_VENV
+      - DSH_TELEMETRY_DISABLED
+      - DSH_EXPOSE_PORT=${DSH_EXPOSE_PORT:-3080}
+    volumes:
+      # Harness home: sessions, credentials, browser-session cookies, profiles.
+      - dsh-home:/home/node/.dsh
+      # The agent's working directory. Point this at the project it should edit.
+      - ${DSH_WORKSPACE:-../}:/workspace
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS \"http://127.0.0.1:${DSH_EXPOSE_PORT:-3080}/__dsh_proxy_health\" >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+volumes:
+  dsh-home:

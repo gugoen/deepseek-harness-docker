@@ -1,0 +1,38 @@
+# Build context for docker/Dockerfile (Dockerfile-specific ignore file).
+#
+# Keeps the context to the source snapshot: no VCS metadata, no installed
+# dependencies, and no previously generated build output. The repository is
+# only ~160 MB of source, so the transfer is cheap once these are excluded.
+
+.git
+.gitignore
+.gitattributes
+.github
+.gitlab-ci.yml
+
+**/node_modules
+**/lib
+**/dist
+**/coverage
+**/.turbo
+**/.vite
+**/*.tsbuildinfo
+
+.dsh-build
+.DS_Store
+*.log
+.env
+.env.*
+
+# Container glue: only the runtime pieces — entrypoint.mjs, reverse-proxy.mjs,
+# dsh-docker-entrypoint, and shell/ — are COPYed into the image. The build
+# helpers and documentation stay in the repository.
+docker/README.md
+docker/README.zh.md
+docker/build.sh
+docker/run.sh
+docker/docker-compose.yml
+docker/.env.example
+docker/.gitignore
+docker/test
+docker/dist

@@ -1,0 +1,27 @@
+# Compose override that mounts a host Python virtual environment into the
+# container and activates it (see README, "Python").
+#
+#   # in docker/.env
+#   DSH_PYTHON_ROOT=/opt/software/flowai-gp-v4/warehouse/flowai-wh-python
+#   DSH_PYTHON_VENV=/opt/software/flowai-gp-v4/warehouse/flowai-wh-python/.venv
+#
+#   docker compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.python.yml up -d
+#
+# The tree is mounted at its own absolute path, because a virtual environment
+# records where it was created (`pyvenv.cfg`'s `home`, and the `bin/python3`
+# symlink) and cannot start from a different location. Mount DSH_PYTHON_ROOT —
+# the directory that contains both the environment and its base interpreter,
+# usually the whole warehouse directory — so both come along.
+
+services:
+  dsh-web:
+    environment:
+      # Compose interpolates an unset variable to the empty string, which the
+      # harness would have to treat as a path. Require it instead.
+      - DSH_PYTHON_VENV=${DSH_PYTHON_VENV:?set DSH_PYTHON_VENV in docker/.env}
+    volumes:
+      - type: bind
+        source: ${DSH_PYTHON_ROOT:?set DSH_PYTHON_ROOT in docker/.env}
+        target: ${DSH_PYTHON_ROOT:?set DSH_PYTHON_ROOT in docker/.env}
+        read_only: true

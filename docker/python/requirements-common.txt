@@ -1,0 +1,47 @@
+# Reference Python dependency set for the DSH sandbox image.
+#
+# This mirrors the warehouse list at
+# /opt/software/flowai-gp-v4/warehouse/flowai-wh-python/requirements.txt so the
+# image can be baked without depending on a host mount:
+#
+#   ./docker/build.sh --python-requirements docker/python/requirements-common.txt
+#
+# It is a starting point, not an authority: replace it with your own file when
+# the deployment needs a different set. Prefer a bind-mounted virtual
+# environment when size matters — see docker/README.md.
+#
+# Requires-Python >=3.9. The pandas/numpy pins keep manylinux2014 (glibc 2.17)
+# wheels available; newer releases need glibc 2.28+ and lose source-build
+# fallbacks on older targets.
+
+# ---- dagster engine ----
+dagster>=1.13,<1.14
+dagster-webserver>=1.13,<1.14
+dagster-dg-cli>=1.13,<1.14
+pymysql>=1.1
+PyYAML>=6.0
+pytest>=8.0
+
+# ---- backend py_loader / legacy tooling ----
+pandas==2.2.3
+numpy==1.26.4
+SQLAlchemy>=1.4.48
+openpyxl>=3.1
+loguru>=0.7
+lxml
+requests>=2.31
+sqlparse>=0.5
+
+# ---- remaining legacy dependencies ----
+aiomysql>=0.2
+colorama>=0.4
+et-xmlfile>=1.1
+python-dateutil>=2.8
+pytz>=2023.3
+six>=1.16
+tzdata>=2023.3
+kafka-python>=2.2
+prometheus_client>=0.17
+neo4j>=4.4
+pyhocon>=0.3
+pycryptodome>=3.21

@@ -1,0 +1,2 @@
+# Exported image tarballs and checksums written by `build.sh --tarball dist`.
+dist/

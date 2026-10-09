@@ -1,0 +1,5 @@
+#!/bin/sh
+# `ll` — long listing, available as a real command so it also works in
+# non-interactive shells (`docker run --rm <image> ll`) and inside scripts.
+# An identical interactive alias is installed via /etc/profile.d.
+exec ls -alF --color=auto --group-directories-first "$@"

@@ -1,0 +1,27 @@
+#!/bin/sh
+# `get` — one-argument downloader built on curl.
+#
+#   get <url>              save into the current directory under the URL's name
+#   get <url> <path>       save to <path> (-o semantics)
+#   get <url> -            write to stdout
+#
+# Follows redirects, fails on HTTP errors, and retries transient failures.
+set -eu
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  printf 'usage: get <url> [output-file|-]\n' >&2
+  exit 2
+fi
+
+url=$1
+output=${2:-}
+
+if [ "$output" = '-' ]; then
+  exec curl --fail --silent --show-error --location --retry 3 --retry-connrefused "$url"
+fi
+
+if [ -n "$output" ]; then
+  exec curl --fail --silent --show-error --location --retry 3 --retry-connrefused --output "$output" "$url"
+fi
+
+exec curl --fail --silent --show-error --location --retry 3 --retry-connrefused --remote-name "$url"
