@@ -19,6 +19,7 @@
 
 import { spawn } from 'node:child_process'
 import process from 'node:process'
+import { dropEmptyUrlEnv } from './container-env.mjs'
 import { applyPythonRuntime, resolvePythonRuntime } from './python-runtime.mjs'
 import { startReverseProxy } from './reverse-proxy.mjs'
 
@@ -216,6 +217,12 @@ function serve() {
 
 const [, , command = 'serve', ...rest] = process.argv
 try {
+  // Before anything reads the environment: an exported empty URL aborts the
+  // harness profile at boot, and an empty override means "no override".
+  const droppedEnv = dropEmptyUrlEnv()
+  if (droppedEnv.length > 0) {
+    process.stdout.write(`dsh-docker: ignoring empty ${droppedEnv.join(', ')}\n`)
+  }
   const python = activatePython()
   if (python !== undefined) process.stdout.write(`dsh-docker: python ${python}\n`)
   if (command === 'serve') {

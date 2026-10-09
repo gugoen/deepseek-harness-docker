@@ -128,6 +128,104 @@ token 只用于换取一次浏览器会话 Cookie，之后由 Cookie 认证，�
 docker run ... -e DSH_PUBLIC_URL=http://192.168.1.50:3080 ...
 ```
 
+用这个地址聊天、看会话都正常，但**设置页面不行**——Harness 只在回环地址下启用设置，
+解决办法见 [设置页需要回环地址](#设置页需要回环地址)。
+
+### 设置页需要回环地址
+
+Harness 对**设置**界面的门禁是按「浏览器地址栏的主机名」判定的：必须是
+`localhost`、`[::1]` 或 `127.x.x.x`，其它授权域一律关闭 Host 持久化：
+
+```ts
+// packages/client/ui-settings/src/client/index.ts
+const persistence = ctx.remote.$host.isLoopback ? 'host' : 'memory'
+```
+
+所以用非回环地址打开时，**设置 → 模型**会报
+`settings are unavailable in this browser`，所有由 Host 设置文档支撑的表单
+都一样。这是有意为之，上游也写明了——见
+[ui-settings README](../../packages/client/ui-settings/README.md) 的
+"Non-loopback pages get no durable settings"。
+
+有两点它**不是**：
+
+- **不是浏览器问题**：Chrome / Edge / Firefox 表现完全一致；
+- **不是本镜像反向代理能解决的**：代理改写的是链路里的 `Host` **请求头**，而
+  这个判断读的是浏览器自己的地址栏。`--trusted-host` 和 `DSH_PUBLIC_URL` 只
+  授予 API 访问权和改变对外声明的地址，都不会让页面变成回环。
+
+对话、会话、以及输入框里的**模型选择器都不受影响**（模型清单来自 Host 目录，
+不经过设置镜像），只有设置页面需要回环地址。
+
+下面两种办法都是把客户端本地的一个端口转发到容器发布端口，从而让浏览器自己的
+URL 变成 `127.0.0.1`。
+
+#### Windows：用 `netsh interface portproxy`（不需要装额外软件）
+
+在 Windows 客户端上以**管理员身份**打开命令提示符执行。注意 Windows 的
+`IP Helper` 服务（`iphlpsvc`）必须处于运行状态。
+
+```bat
+netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=3080 connectaddress=<服务器IP> connectport=3080
+```
+
+例如服务器是 `10.64.1.3`：
+
+```bat
+netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=3080 connectaddress=10.64.1.3 connectport=3080
+```
+
+查看规则，以及用完删除：
+
+```bat
+netsh interface portproxy show all
+
+netsh interface portproxy delete v4tov4 listenaddress=127.0.0.1 listenport=3080
+```
+
+- `listenaddress=127.0.0.1` 让转发只监听客户端自己的回环——这正是浏览器主机名
+  变成回环的关键。**不要在客户端上用 `0.0.0.0`**，那会把这台机器变成对整个
+  网络开放的代理。
+- `connectaddress` 是运行容器的那台机器；`connectport` 是**宿主机发布端口**
+  （即 `-p <宿主端口>:3080` 的左边）。
+- `listenport` 可以随便选；沿用发布端口就能让启动日志里打印的 URL 直接可用。
+
+要对齐的是**宿主机发布端口**，不是容器内部端口。若容器是用 `-p 3081:3080`
+启动的，就转发到 `connectport=3081`：
+
+```bat
+netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=3080 connectaddress=12.7.13.13 connectport=3081
+```
+
+然后用浏览器打开 `http://127.0.0.1:3080/?token=<docker logs 里的 token>`
+（若 `listenport` 也用 3081，则打开 `http://127.0.0.1:3081/...`）。
+
+如果这台机器只用这种方式访问，建议把对外地址也声明成它，这样启动横幅打印的就是
+你真正该打开的地址：
+
+```sh
+docker run ... -e DSH_PUBLIC_URL=http://127.0.0.1:3080 ...
+```
+
+#### 通用：SSH 本地转发
+
+```sh
+ssh -L 3080:127.0.0.1:3080 user@<服务器IP>
+# Windows 未装 OpenSSH 时：plink -L 3080:127.0.0.1:3080 user@<服务器IP>
+```
+
+然后打开 `http://127.0.0.1:3080/?token=<token>`。
+
+#### 如果确实做不了端口转发
+
+改用容器环境变量下发模型凭据，不必经过 GUI——调用模型本身不需要写设置：
+
+```sh
+docker run ... -e DEEPSEEK_API_KEY=sk-... deepseek-harness-web:0.2.1-alpha.1
+```
+
+被门禁挡住的只有设置**页面**，输入框里的模型选择器照常可用。
+
 ## 构建
 
 ```sh
@@ -189,7 +287,7 @@ Dockerfile 中没有任何与架构绑定的步骤：基础镜像、apt 包列�
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `DEEPSEEK_API_KEY` | 无 | 模型调用凭据。不设置界面也能启动，但会话调用模型时会失败。 |
-| `DEEPSEEK_BASE_URL` | 无 | 兼容 OpenAI 协议的接入点覆盖。 |
+| `DEEPSEEK_BASE_URL` | 未设置 | 兼容 OpenAI 协议的接入点覆盖。**不要导出空值**——见排错表中的 `Invalid URL` 一行。 |
 | `DSH_PUBLIC_URL` | 未设置 | 启动时打印、并作为 `DSH_WEB_URL` 交给模型的对外地址。 |
 | `DSH_PUBLIC_HOST` | 未设置 | 便捷写法：自动拼出 `http://$DSH_PUBLIC_HOST:$DSH_EXPOSE_PORT`。 |
 | `DSH_EXPOSE_PORT` | `3080` | 反向代理对外发布的容器端口。 |
@@ -390,4 +488,6 @@ python3 docker/test/check-arm64-packages.py
 | `apt-get update` 无法解析 `deb.debian.org` | 已自动重试 5 次后才会失败。可加 `--debian-mirror https://mirrors.tuna.tsinghua.edu.cn`（或其他镜像站根地址）重试。 |
 | 构建内存不足 | TypeScript 构建使用 `--max-old-space-size=4096`；请提高构建阶段的 `NODE_OPTIONS` 并给 Docker 更多内存。 |
 | 从界面安装插件失败 | 镜像内已装 `pnpm`，但容器需要能访问外网。 |
+| 设置-模型报 `settings are unavailable in this browser` | 页面不在回环地址上，而 Harness 的 Host 设置只在回环页面可用（见 [设置页需要回环地址](#设置页需要回环地址)）。做本地端口转发（Windows 上用 `netsh interface portproxy`）后用 `http://127.0.0.1:<端口>` 访问；或改用容器环境变量下发模型凭据。 |
+| 启动即报 `llm-deepseek … TypeError: Invalid URL` | 导出了**空的** `DEEPSEEK_BASE_URL`（或 `DEEPSEEK_SEARCH_BASE_URL`）。Harness 会用 `new URL()` 解析它，而「空覆盖」不等于「不覆盖」。在 `.env` 里保持该行注释即可；entrypoint 会丢弃空值并打印 `dsh-docker: ignoring empty …`，让 profile 正常启动。 |
 | `docker build` 报 `resolve : lstat docker: no such file or directory` | 你的 `docker` CLI 是 **snap** 版本，受限于家目录，读不到 `/opt`、`/tmp` 下的构建上下文。可把仓库复制到家目录再构建（`cp -a . ~/dsh-build && cd ~/dsh-build && docker build -f docker/Dockerfile .`），或直接调用未受限的二进制：把 buildx 插件链接到 `~/.docker/cli-plugins` 后使用 `/snap/docker/current/bin/docker build -f docker/Dockerfile .`。 |

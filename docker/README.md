@@ -138,6 +138,111 @@ correct address instead of the `127.0.0.1` default:
 docker run ... -e DSH_PUBLIC_URL=http://192.168.1.50:3080 ...
 ```
 
+Chat and sessions work over that address, but **the settings pages do not** — the
+harness only enables those for a loopback address. See
+[Settings require a loopback address](#settings-require-a-loopback-address).
+
+### Settings require a loopback address
+
+The harness gates its **settings** surface on the hostname the browser used.
+`location.hostname` must be `localhost`, `[::1]`, or a `127.x.x.x` literal;
+on any other authority the client disables Host-backed settings:
+
+```ts
+// packages/client/ui-settings/src/client/index.ts
+const persistence = ctx.remote.$host.isLoopback ? 'host' : 'memory'
+```
+
+A non-loopback page therefore opens **Settings → Models** with
+`settings are unavailable in this browser`, and every other form backed by the
+Host settings document behaves the same way. This is deliberate and documented
+upstream — [ui-settings README](../../packages/client/ui-settings/README.md),
+"Non-loopback pages get no durable settings".
+
+Two things it is **not**:
+
+- not a browser problem (any Chrome/Edge/Firefox behaves identically);
+- not something this image's reverse proxy can change. The proxy rewrites the
+  `Host` *header* on the wire, while this check reads the browser's own address
+  bar. `--trusted-host` and `DSH_PUBLIC_URL` grant API access and change what is
+  advertised; neither makes the page loopback.
+
+Chat, sessions, and the composer's model picker are unaffected — the model list
+comes from the Host catalog, not from the settings mirror. Only the settings
+pages need a loopback address.
+
+Both fixes below forward a local port on the client machine to the container's
+published port, so the browser's own URL becomes `127.0.0.1`.
+
+#### Windows: `netsh interface portproxy` (no extra software)
+
+Run this in an **elevated** Command Prompt on the Windows client. Windows'
+`IP Helper` service (`iphlpsvc`) must be running.
+
+```bat
+netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=3080 connectaddress=<SERVER-IP> connectport=3080
+```
+
+For example, against a server at `10.64.1.3`:
+
+```bat
+netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=3080 connectaddress=10.64.1.3 connectport=3080
+```
+
+Inspect the rules, and remove one when you are done:
+
+```bat
+netsh interface portproxy show all
+
+netsh interface portproxy delete v4tov4 listenaddress=127.0.0.1 listenport=3080
+```
+
+- `listenaddress=127.0.0.1` keeps the forwarder on the client's own loopback —
+  that is exactly what makes the browser's hostname loopback. Do **not** use
+  `0.0.0.0` on a client machine: that turns it into an open relay for everyone on
+  the network.
+- `connectaddress` is the machine running the container; `connectport` is the
+  **published host port** (the left side of `-p <host>:3080`).
+- `listenport` is free to choose; reusing the published port keeps the printed
+  URL valid as-is.
+
+It is the **published** port that matters, not the container's internal one. If
+the container runs as `-p 3081:3080`, the forward target is `connectport=3081`:
+
+```bat
+netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=3080 connectaddress=10.64.1.3 connectport=3081
+```
+
+Then browse `http://127.0.0.1:3080/?token=<token from docker logs>` (or
+`http://127.0.0.1:3081/...` when `listenport` is also 3081).
+
+If the container is the only thing you reach this way, advertise that address so
+the startup banner prints the URL you should actually open:
+
+```sh
+docker run ... -e DSH_PUBLIC_URL=http://127.0.0.1:3080 ...
+```
+
+#### Any platform: SSH local forwarding
+
+```sh
+ssh -L 3080:127.0.0.1:3080 user@<SERVER-IP>
+# Windows without OpenSSH: plink -L 3080:127.0.0.1:3080 user@<SERVER-IP>
+```
+
+Then browse `http://127.0.0.1:3080/?token=<token>`.
+
+#### If you cannot forward a port
+
+Set the model credentials through the container environment instead of the GUI.
+The agent needs no settings write to call a model:
+
+```sh
+docker run ... -e DEEPSEEK_API_KEY=sk-... deepseek-harness-web:0.2.1-alpha.1
+```
+
+Only the settings *pages* are gated; the composer's model picker keeps working.
+
 ## Building
 
 ```sh
@@ -202,7 +307,7 @@ resolve for whatever platform the build targets.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `DEEPSEEK_API_KEY` | — | Model access. The UI boots without it; sessions fail when they call the model. |
-| `DEEPSEEK_BASE_URL` | — | OpenAI-compatible endpoint override. |
+| `DEEPSEEK_BASE_URL` | unset | OpenAI-compatible endpoint override. Must not be exported empty — see the `Invalid URL` row under Troubleshooting. |
 | `DSH_PUBLIC_URL` | unset | Advertised URL printed at startup and given to the model as `DSH_WEB_URL`. |
 | `DSH_PUBLIC_HOST` | unset | Convenience alternative: `http://$DSH_PUBLIC_HOST:$DSH_EXPOSE_PORT` is derived. |
 | `DSH_EXPOSE_PORT` | `3080` | Container port the reverse proxy publishes. |
@@ -421,4 +526,6 @@ a trusted network:
 | `apt-get update` cannot resolve `deb.debian.org` | Retried five times before failing. Re-run with `--debian-mirror https://mirrors.tuna.tsinghua.edu.cn` (or another mirror root). |
 | Build runs out of memory | The TypeScript build uses `--max-old-space-size=4096`. Raise `NODE_OPTIONS` in the build stage and give Docker more memory. |
 | Plugin install from the GUI fails | `pnpm` is installed in the image but the container needs outbound network access. |
+| `settings are unavailable in this browser` in Settings → Models | The page is not on a loopback address, which is where the harness keeps Host-backed settings (see [Settings require a loopback address](#settings-require-a-loopback-address)). Forward a local port — `netsh interface portproxy` on Windows — and browse `http://127.0.0.1:<port>`, or pass the model credentials through the container environment. |
+| `llm-deepseek … TypeError: Invalid URL` at boot | An **empty** `DEEPSEEK_BASE_URL` (or `DEEPSEEK_SEARCH_BASE_URL`) is exported. The harness parses it with `new URL()`, and an empty override is not the same as no override. Leave the line commented out in `.env`; the entrypoint drops empty values and logs `dsh-docker: ignoring empty …` so the profile boots. |
 | `docker build` fails with `resolve : lstat docker: no such file or directory` | The `docker` CLI is a **snap**, which is confined to your home directory and cannot read a build context under `/opt` or `/tmp`. Build from a copy inside `$HOME` (`cp -a . ~/dsh-build && cd ~/dsh-build && docker build -f docker/Dockerfile .`), or invoke the unconfined binary directly (`/snap/docker/current/bin/docker build -f docker/Dockerfile .`) after linking the buildx plugin into `~/.docker/cli-plugins`. |
