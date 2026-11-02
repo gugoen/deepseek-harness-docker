@@ -9,7 +9,7 @@ kind: "package-library"
 
 ## 概述
 
-`dsh-session-snapshot` 提供无密钥已记录会话测试（`pnpm run test:snapshot`）背后的共享支持：封闭 manifest、类型化身份脱敏、规范化、workspace 比较、fixture（测试前置数据）保护，以及 headless、SDK、ACP（Agent Client Protocol）与 Web owner 使用的协议适配器。ACP 适配器以真实子进程启动被测 profile，驱动确定性输入脚本，并注册完整的录制、回放与刷新套件。每个场景都提交足够证据来证明模型可见输出与文件系统效果，不依赖 agent（智能体）自述。包入口会导入 vitest，因此只能在 vitest 运行中使用。
+`dsh-session-snapshot` 提供无密钥已记录会话测试（`pnpm run test:snapshot`）背后的共享支持：封闭 manifest、类型化身份脱敏、规范化、workspace 比较、fixture（测试前置数据）保护，以及 headless、SDK（`sdk` 与 `sdk-minimal`）、ACP（Agent Client Protocol）与 Web owner 使用的协议适配器。ACP 适配器以真实子进程启动被测 profile，驱动确定性输入脚本，并注册完整的录制、回放与刷新套件。每个场景都提交足够证据来证明模型可见输出与文件系统效果，不依赖 agent（智能体）自述。包入口会导入 vitest，因此只能在 vitest 运行中使用。
 
 ## 目录
 
@@ -81,6 +81,10 @@ Headless/ACP 与 SDK 适配器在规范化之前，将原始目录中的子创�
 ### 录制、回放与刷新
 
 `pnpm run test:snapshot:record` 调用在线 LLM（大语言模型），并在规范具名版本文件下写入收集到的当前 generation。record 与 refresh 绝不重命名或删除已完成的 generation，即使后续运行不再产生某个 child 角色也一样；受审阅的源树整理只有在同角色存在已验证的当前替代文件后才移除前代。显式声明 `sessionFormat` 的场景在录制模式下保持只读。`pnpm run test:snapshot:refresh` 保持无密钥，运行选定的最高 replay 输入，并写入 stdout、各 pin 自有的提示词与工具 schema 伴随文件，以及新鲜当前 generation 的可比较 Session 输出；保留历史输入的场景写入单独的 writer 输出比较基准，而非规范当前格式 replay 代际。Headless 与 SDK 场景可通过本地 `runtime.cordis.yml` patch 添加执行 fixture。每个组合 owner 把 replay patch 放在 live patch 旁；顶层 `snapshots/` 拥有 Session 驱动场景，其他预期输出留在其 package owner 旁。[`dsh-llm-replay`](../llm-replay/README.zh.md) 提供通过 `DSH_SNAPSHOT_*` 环境值选择的已记录流。
+
+首次录制尚无 Session 文件的 headless 在线场景时，临时在 `snapshot.yml` 设置 `input.task`，由在线组合选择模型。录制后移除该输入，让选定 Session 拥有任务文本。回放与刷新必须已有规范 Session 文件，格式错误或缺少 parent 的角色仍会报错。
+
+嵌套的 `workspace.expected/<directory>/.empty` 标记表示空目录；实际 workspace 中的同名文件仍按普通文件比较。
 
 ### 固定请求 header 与系统提示
 

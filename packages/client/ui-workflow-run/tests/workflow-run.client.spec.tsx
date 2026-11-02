@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { contextMenuHook } from '@deepseek-ai/dsh-client-test-runtime'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { Context } from '@deepseek-ai/cordis'
@@ -20,7 +21,7 @@ import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session/types'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import { apply as applyLocale, inject as localeInject } from '@deepseek-ai/dsh-client-locale/client'
 import {
-  chatSnapshot as emptyChatSnapshot, conversationSnapshot, makeTranslate, sessionSnapshot,
+  allowAllAccess, chatSnapshot as emptyChatSnapshot, conversationSnapshot, makeTranslate, sessionSnapshot,
   stubConfigForm, TestSessions, workspaceSnapshot,
 } from '@deepseek-ai/dsh-client-test-runtime'
 import {
@@ -350,6 +351,7 @@ function panelProps(data: WorkflowRunChatData, sessions = listState(), openSessi
     useTrajectory: selector => selector(panelTrajectory),
     useInput: () => { throw new Error('unused') },
     inputActions: {
+      insertQuote: () => false,
       captureInsertion: () => ({ start: 0, end: 0, draftRev: 0 }),
       insertText: () => false,
       setDraft: () => {},
@@ -360,16 +362,15 @@ function panelProps(data: WorkflowRunChatData, sessions = listState(), openSessi
       submit: () => {},
     },
     useWorkspaces: selector => selector(panelWorkspace),
+    ...allowAllAccess,
+    useContextMenu: contextMenuHook(),
     useTurnData: () => undefined,
     useDisclosure: () => { throw new Error('unused') },
     useGroupAction: () => { throw new Error('unused') },
-    openSkill: vi.fn(),
     openFile: () => {},
     inspectCall: () => {},
     forkAt: () => {},
     loadImage: () => Promise.reject(new Error('not used')),
-    renderMessageImages: () => null,
-    fileMentions: () => undefined,
     openSession,
     t: makeTranslate(zh),
   }

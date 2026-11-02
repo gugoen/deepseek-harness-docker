@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { contextMenuHook } from '@deepseek-ai/dsh-client-test-runtime'
 /** FontSettingsGroup behavior: the text font-size row shows collapsed, its
  * disclosure button toggles the font and size rows, and each row routes its
  * write to its own role. */
@@ -8,7 +9,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
+import { allowAllAccess, bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import { FontSettingsGroup } from '../src/client/FontSettingsGroup.tsx'
 import type { FontSettingsGroupProps } from '../src/client/FontSettingsGroup.tsx'
 import { createFontRowStore } from '../src/client/settings-store.ts'
@@ -55,6 +56,8 @@ function mount() {
     useSessionStatus,
     usePanelInfo, useSessionRetainInfo: () => undefined, useResource,
     useWorkspaces: emptyWorkspaces(),
+    ...allowAllAccess,
+    useContextMenu: contextMenuHook(),
     useStore: bindSnapshotSelector(store),
     actions: store.actions,
     t: (key: string) => COPY[key] ?? key,

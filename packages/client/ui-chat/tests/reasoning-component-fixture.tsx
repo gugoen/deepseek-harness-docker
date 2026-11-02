@@ -5,10 +5,15 @@ import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts
 import type { PropsRenderFactories } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ReasoningContentInput } from '../src/client/contract/slots.ts'
 import type { AssistantMarkdownProps } from '../src/client/chat/AssistantMarkdown.tsx'
-import { ReasoningContent } from '../src/client/chat/ReasoningContent.tsx'
+import { DefaultReasoningBody, ReasoningContent } from '../src/client/chat/ReasoningContent.tsx'
 import { zh } from '../src/client/locale.ts'
 
 const t = makeTranslate(zh, commonZh)
+
+/** Reject attachment loads in component fixtures without durable images. */
+export const unusedImageLoader: AssistantMarkdownProps['loadImage'] = async () => {
+  throw new Error('This component fixture has no durable image attachments')
+}
 
 function content(input: ReasoningContentInput) {
   // The component only reads these inputs; unused framework seats are exercised in assembly tests.
@@ -16,9 +21,12 @@ function content(input: ReasoningContentInput) {
 }
 
 /** Render the production child component without emulating a registry or its dispatch. */
-export const renderReasoningSlot = (
-  (_key: 'conversation.chat.reasoning.body', input: ReasoningContentInput) => content(input)
-) as AssistantMarkdownProps['renderSlot']
+export const renderReasoningSlot: AssistantMarkdownProps['renderSlot'] = (key: string, input: object) => {
+  if (key !== 'conversation.chat.reasoning.body') throw new Error(`Unexpected reasoning Slot: ${key}`)
+  return createElement(DefaultReasoningBody, {
+    ...input, renderFactorySlot: renderReasoningFactory,
+  } as ComponentProps<typeof DefaultReasoningBody>)
+}
 
 /** Supply the official component at the Factory call seam of a standalone component unit. */
 export const renderReasoningFactory: PropsRenderFactories['renderFactorySlot'] = (name, input) => {

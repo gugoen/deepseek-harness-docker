@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { contextMenuHook } from '@deepseek-ai/dsh-client-test-runtime'
 /** The credential onboarding step owns login until dismissal or completion. */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -6,7 +7,7 @@ import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ThemeSnapshot } from '@deepseek-ai/dsh-client-ui-theme/client'
 import { AccountOnboarding } from '../src/client/AccountOnboarding.tsx'
 import type { AccountSnapshot } from '../src/client/AccountSection.tsx'
-import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+import { allowAllAccess, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { en } from '../src/client/locales.ts'
 
 afterEach(cleanup)
@@ -17,11 +18,13 @@ const theme: ThemeSnapshot = {
 }
 
 it('claims onboarding while loading, offers API key fallback, and completes after login', () => {
-  let account: AccountSnapshot = { view: undefined, details: undefined, failed: false }
+  let account: AccountSnapshot = { view: undefined, details: undefined, avatar: undefined, failed: false }
   const unused = (): never => { throw new Error('AccountOnboarding does not consume global hooks') }
   const globals: GlobalStandardProps = {
     usePanelInfo: unused, useSessions: unused, useSessionStatus: unused,
     useSessionRetainInfo: unused, useResource: unused, useWorkspaces: unused,
+    ...allowAllAccess,
+    useContextMenu: contextMenuHook(),
   }
   const props = {
     ...globals,
@@ -32,6 +35,7 @@ it('claims onboarding while loading, offers API key fallback, and completes afte
     start: vi.fn(async () => {}), cancel: vi.fn(async () => {}), signOut: vi.fn(async () => {}),
     contactUs: vi.fn(), t: makeTranslate(en),
     refreshAccount: vi.fn(async () => {}), bonusNoticeShown: vi.fn(), bonusNoticeDismissed: vi.fn(),
+    avatarFailed: vi.fn(),
   }
   const view = render(<AccountOnboarding {...props} />)
   expect(props.setOnboarding).toHaveBeenCalledExactlyOnceWith(true)
