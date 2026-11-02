@@ -6,6 +6,7 @@
 #   ./docker/run.sh --port 8080            # publish a different host port
 #   ./docker/run.sh --workspace ~/project  # sandbox the agent in one project
 #   ./docker/run.sh --shell                # drop into the sandbox instead
+#   ./docker/run.sh --root                 # run the harness as root (see README)
 #   ./docker/run.sh --python-venv /opt/software/flowai-gp-v4/warehouse/flowai-wh-python/.venv
 #
 # The startup log prints the exact token URL to open in a browser, including
@@ -21,6 +22,7 @@ DETACH=1
 BASH_MODE=0
 PYTHON_VENV=""
 PYTHON_WRITABLE=0
+RUN_AS_ROOT=0
 
 usage() {
   cat <<'EOF'
@@ -35,6 +37,10 @@ Usage: run.sh [options]
                            base interpreter is mounted too, both read-only and
                            at their original absolute paths
   --python-venv-writable   mount that environment read-write instead
+  --root                   run the harness, and every command the agent
+                           executes, as root instead of the unprivileged node
+                           user. HOME stays /home/node so the npmrc, pnpm home
+                           and shell setup keep resolving.
   --foreground             do not detach
   --shell                  run bash in the sandbox instead of the server
   -h, --help               show this help
@@ -50,6 +56,7 @@ while [ "$#" -gt 0 ]; do
     --env-file) ENV_FILE="${2:?}"; shift 2 ;;
     --python-venv) PYTHON_VENV="${2:?}"; shift 2 ;;
     --python-venv-writable) PYTHON_WRITABLE=1; shift ;;
+    --root) RUN_AS_ROOT=1; shift ;;
     --foreground) DETACH=0; shift ;;
     --shell) BASH_MODE=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -106,6 +113,13 @@ ARGS=(
   "${PYTHON_MOUNTS[@]}"
   "${PYTHON_ENV[@]}"
 )
+# Root changes only the Unix identity. HOME is pinned to the node home so the
+# image's ~/.npmrc (registry + retry policy) and PNPM_HOME keep working;
+# DSH_HOME stays /home/node/.dsh so the same volume keeps the data.
+if [ "${RUN_AS_ROOT}" = "1" ]; then
+  ARGS+=(--user root --env "HOME=/home/node")
+  echo "run.sh: running as root (HOME=/home/node)"
+fi
 [ -n "${DEEPSEEK_BASE_URL:-}" ] && ARGS+=(--env "DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL}")
 [ -n "${DSH_PUBLIC_URL:-}" ] && ARGS+=(--env "DSH_PUBLIC_URL=${DSH_PUBLIC_URL}")
 [ -n "${ENV_FILE}" ] && ARGS+=(--env-file "${ENV_FILE}")

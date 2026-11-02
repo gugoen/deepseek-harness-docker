@@ -67,7 +67,7 @@ else
 fi
 
 info "1. remote request without a session is refused by auth, not by the trust fence"
-CODE_ANON="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${BASE}/")"
+CODE_ANON="$(curl --noproxy "*" -s -o /dev/null -w '%{http_code}' --max-time 10 "${BASE}/")"
 if [ "${CODE_ANON}" = "401" ]; then
   pass "GET / -> 401 (proxy forwarded; harness did not answer 403 for authority ${LAN_IP})"
 elif [ "${CODE_ANON}" = "403" ]; then
@@ -78,7 +78,7 @@ fi
 
 info "2. launch-token exchange over the remote address serves the UI"
 if [ -n "${TOKEN}" ]; then
-  CODE_UI="$(curl -s -L -c "${COOKIE_JAR}" -b "${COOKIE_JAR}" \
+  CODE_UI="$(curl --noproxy "*" -s -L -c "${COOKIE_JAR}" -b "${COOKIE_JAR}" \
     -o "${PAGE_FILE}" -w '%{http_code}' --max-time 20 "${BASE}/?token=${TOKEN}")"
   if [ "${CODE_UI}" = "200" ] && grep -qi '<div id="root"' "${PAGE_FILE}"; then
     pass "GET /?token=... -> 200 and the Web UI shell was served"
@@ -96,7 +96,7 @@ fi
 info "3. /api passes the browser-trust fence over the remote address"
 # /api/file is a real GET route owned by the session controller: any answer other
 # than 403 proves the request reached the RPC bridge instead of the trust fence.
-CODE_API="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -b "${COOKIE_JAR}" "${BASE}/api/file")"
+CODE_API="$(curl --noproxy "*" -s -o /dev/null -w '%{http_code}' --max-time 10 -b "${COOKIE_JAR}" "${BASE}/api/file")"
 if [ "${CODE_API}" = "403" ]; then
   fail "GET /api/file -> 403: the browser-trust fence rejected the proxied request"
 elif [ "${CODE_API}" = "000" ]; then
@@ -107,7 +107,7 @@ fi
 
 info "4. /api WebSocket upgrade completes"
 KEY="$(head -c 16 /dev/urandom | base64)"
-WS_OUT="$(curl -s -i --max-time 8 -b "${COOKIE_JAR}" \
+WS_OUT="$(curl --noproxy "*" -s -i --max-time 8 -b "${COOKIE_JAR}" \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' -H "Sec-WebSocket-Key: ${KEY}" \
   "${BASE}/api/remote.mux" 2>/dev/null | head -1 | tr -d '\r')"
@@ -119,7 +119,7 @@ fi
 
 info "4b. the proxy does not bypass harness authentication"
 KEY="$(head -c 16 /dev/urandom | base64)"
-WS_ANON="$(curl -s -i --max-time 8 \
+WS_ANON="$(curl --noproxy "*" -s -i --max-time 8 \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' -H "Sec-WebSocket-Key: ${KEY}" \
   "${BASE}/api/remote.mux" 2>/dev/null | head -1 | tr -d '\r')"

@@ -22,6 +22,8 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
         PYTHON_EXTRA_PACKAGES: ${PYTHON_EXTRA_PACKAGES:-}
     container_name: ${DSH_CONTAINER_NAME:-dsh-web}
+    # `node` (the image default) or `root`; see "Running as root" in the README.
+    user: ${DSH_USER:-node}
     restart: unless-stopped
     ports:
       # HOST:CONTAINER — change the host port if 3080 is taken.
@@ -37,6 +39,10 @@ services:
       # e.g. DSH_PUBLIC_URL=http://192.168.1.50:3080
       - DSH_PUBLIC_URL
       - DSH_PUBLIC_HOST
+      # Pinned to the node home for either user: the image's ~/.npmrc carries the
+      # registry and retry policy, and PNPM_HOME lives there too. DSH_HOME stays
+      # /home/node/.dsh so switching the user keeps the same data volume.
+      - HOME=/home/node
       # Only useful together with docker-compose.python.yml, which mounts it.
       - DSH_PYTHON_VENV
       - DSH_TELEMETRY_DISABLED

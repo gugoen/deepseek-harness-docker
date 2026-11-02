@@ -323,6 +323,51 @@ docker run --rm deepseek-harness-web:0.2.1-alpha.1 ll /workspace
 `ll` 和 `get` 是真实可执行文件（不只是别名），因此在非交互式 shell、
 `docker run <image> <cmd>` 和脚本里同样可用。
 
+## 以 root 运行
+
+镜像默认以非特权的 `node` 用户（uid 1000）运行，Harness 会把这一身份传给 Agent
+执行的每一条命令。要改身份在**运行时**指定即可，不需要重新构建镜像。
+
+```sh
+./docker/run.sh --root
+```
+
+或手工指定：
+
+```sh
+docker run --name dsh-web -p 3080:3080 \
+  --user root -e HOME=/home/node \
+  -v dsh-home:/home/node/.dsh \
+  deepseek-harness-web:0.2.1-alpha.1
+```
+
+用 Compose 时，在 `docker/.env` 里设 `DSH_USER=root`（compose 文件里已经写了
+`user: ${DSH_USER:-node}`，并固定了 `HOME=/home/node`）。
+
+只是想要一个 root 的临时 shell、不想重启容器时：
+
+```sh
+docker exec -u root -it dsh-web bash
+```
+
+**务必保留 `HOME=/home/node`。** Harness 从 `~/.npmrc` 读取 registry 和重试策略，
+`PNPM_HOME` 也指向 `~/.local/share/pnpm`；若把 `HOME` 变成 `/root`，这两个文件都
+不存在，`pnpm` 会静默回退到官方 npm 源。`DSH_HOME` 也请保持镜像默认的
+`/home/node/.dsh`，这样切换用户后同一个数据卷里的会话、凭据和 Cookie 都还在。
+
+### root 改变了什么、没改变什么
+
+- **绑定挂载的文件在宿主机上会变成 root 所有。** 用 `-v /srv/project:/workspace`
+  时，Agent 写入的一切在宿主机上都显示为 `uid 0`。请挂载一个你能 `chown` 的目录，
+  或者宿主机用户不是 root 时干脆保持 `node`。
+- **命名卷保留它创建时的属主。** root 写过的文件，之后 `node` 改不动。同一个卷
+  请固定用一种用户。
+- **Harness 自身的权限控制是另一层。** `DSH_PERMISSION_MODE`
+  （`read-only` / `workspace-write` / `danger-full-access`，默认
+  `workspace-write`）和审批策略仍然生效——uid 是 root 并不会让 Agent 获得更多权限。
+- **它不是逃逸到宿主机的手段。** root 仍被限制在容器内，只有你传入的挂载点可达。
+  除非确有需要，仍建议用 `node`。
+
 ## Python 环境
 
 镜像内置 Debian 的 `python3`（bookworm 上是 3.11）以及 `pip`、`venv` 和开发头文件，
@@ -476,6 +521,14 @@ python3 docker/test/check-arm64-packages.py
   由连接配置的 `cookieMaxAgeDays` 决定。
 - 只挂载 Agent 确实需要修改的目录。
 
+### 命令隔离
+
+Harness 对 shell 工具还有自己的沙箱。默认权限模式是 `workspace-write`，由
+Landlock（较新的 Linux 内核）或 `bubblewrap` 实施；本镜像**两个后端都已内置**。
+它是「失败即拒绝」的：两个后端都跑不起来时，Agent 的命令会被拒绝，而不是悄悄
+在没有隔离的情况下执行。`DSH_PERMISSION_MODE=danger-full-access` 会关闭隔离与
+审批——见下面排错表。
+
 ## 常见问题
 
 | 现象 | 原因与处理 |
@@ -490,4 +543,6 @@ python3 docker/test/check-arm64-packages.py
 | 从界面安装插件失败 | 镜像内已装 `pnpm`，但容器需要能访问外网。 |
 | 设置-模型报 `settings are unavailable in this browser` | 页面不在回环地址上，而 Harness 的 Host 设置只在回环页面可用（见 [设置页需要回环地址](#设置页需要回环地址)）。做本地端口转发（Windows 上用 `netsh interface portproxy`）后用 `http://127.0.0.1:<端口>` 访问；或改用容器环境变量下发模型凭据。 |
 | 启动即报 `llm-deepseek … TypeError: Invalid URL` | 导出了**空的** `DEEPSEEK_BASE_URL`（或 `DEEPSEEK_SEARCH_BASE_URL`）。Harness 会用 `new URL()` 解析它，而「空覆盖」不等于「不覆盖」。在 `.env` 里保持该行注释即可；entrypoint 会丢弃空值并打印 `dsh-docker: ignoring empty …`，让 profile 正常启动。 |
+| Agent 执行命令报 `SandboxUnavailableError` / 「sandbox is unavailable」 | 宿主机上两种隔离后端都跑不起来：Landlock 需要 Linux 5.13+，`bubblewrap` 需要允许非特权 user namespace。加 `-e DSH_PERMISSION_MODE=danger-full-access` 可无隔离执行（同时关闭审批）；或者给容器 `--cap-add SYS_ADMIN` 让 `bwrap` 能创建命名空间。可用 `docker exec <容器名> sh -c 'bwrap --version'` 和 `uname -r` 自查。 |
+| 容器内 shell 是 `node`、Agent 装不了系统包 | 镜像以 uid 1000 运行。临时 root shell 用 `docker exec -u root -it <容器名> bash`；要整个容器都用 root，启动时加 `--user root -e HOME=/home/node`（即 `./docker/run.sh --root`）。见 [以 root 运行](#以-root-运行)。 |
 | `docker build` 报 `resolve : lstat docker: no such file or directory` | 你的 `docker` CLI 是 **snap** 版本，受限于家目录，读不到 `/opt`、`/tmp` 下的构建上下文。可把仓库复制到家目录再构建（`cp -a . ~/dsh-build && cd ~/dsh-build && docker build -f docker/Dockerfile .`），或直接调用未受限的二进制：把 buildx 插件链接到 `~/.docker/cli-plugins` 后使用 `/snap/docker/current/bin/docker build -f docker/Dockerfile .`。 |

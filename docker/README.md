@@ -344,6 +344,56 @@ docker run --rm deepseek-harness-web:0.2.1-alpha.1 ll /workspace
 `ll` and `get` are real executables (not only aliases), so they also work in
 non-interactive shells, `docker run <image> <cmd>` and scripts.
 
+## Running as root
+
+The image runs as the unprivileged `node` user (uid 1000), and the harness hands
+that identity to every command the agent executes. Change it at run time — no
+rebuild is needed.
+
+```sh
+./docker/run.sh --root
+```
+
+or by hand:
+
+```sh
+docker run --name dsh-web -p 3080:3080 \
+  --user root -e HOME=/home/node \
+  -v dsh-home:/home/node/.dsh \
+  deepseek-harness-web:0.2.1-alpha.1
+```
+
+With Compose, set `DSH_USER=root` in `docker/.env`; the file ships
+`user: ${DSH_USER:-node}` and pins `HOME=/home/node`.
+
+For a one-off root shell without restarting the container:
+
+```sh
+docker exec -u root -it dsh-web bash
+```
+
+**Keep `HOME=/home/node`.** The harness reads `~/.npmrc` for its registry and
+retry policy, and `PNPM_HOME` points at `~/.local/share/pnpm`. With
+`HOME=/root` neither exists, so `pnpm` silently falls back to the public npm
+registry. Keep `DSH_HOME` at the image default (`/home/node/.dsh`) as well, so
+one volume carries sessions, credentials, and cookies across user changes.
+
+### What root does and does not change
+
+- **Bind mounts become root-owned on the host.** With
+  `-v /srv/project:/workspace`, everything the agent writes appears as `uid 0`
+  on the host. Mount a directory you can `chown`, or stay on `node` when the
+  host user is not root.
+- **A named volume keeps the ownership it was created with.** Files root wrote
+  cannot be rewritten by `node` later. Pick one user for the life of the volume.
+- **The harness's own controls are separate.** `DSH_PERMISSION_MODE`
+  (`read-only` / `workspace-write` / `danger-full-access`, default
+  `workspace-write`) and the approval policy still apply — a root uid does not
+  widen what the agent is allowed to do.
+- **It is not a host escape.** Root is confined to the container; only the
+  mounts you pass are reachable. Still, prefer `node` unless something genuinely
+  needs root.
+
 ## Python
 
 The image carries Debian's `python3` (3.11 on bookworm) with `pip`, `venv`, and
@@ -514,6 +564,15 @@ a trusted network:
   connection config.
 - Mount only the directory the agent should be able to modify.
 
+### Command confinement
+
+The harness keeps its own sandbox around the shell tools. The default
+permission mode is `workspace-write`, enforced by Landlock (modern Linux
+kernels) or `bubblewrap`; this image ships **both** backends. It fails closed:
+if neither can run, the agent's commands are refused rather than silently
+running unconfined. `DSH_PERMISSION_MODE=danger-full-access` turns confinement
+and approvals off — see the troubleshooting row below.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -528,4 +587,6 @@ a trusted network:
 | Plugin install from the GUI fails | `pnpm` is installed in the image but the container needs outbound network access. |
 | `settings are unavailable in this browser` in Settings → Models | The page is not on a loopback address, which is where the harness keeps Host-backed settings (see [Settings require a loopback address](#settings-require-a-loopback-address)). Forward a local port — `netsh interface portproxy` on Windows — and browse `http://127.0.0.1:<port>`, or pass the model credentials through the container environment. |
 | `llm-deepseek … TypeError: Invalid URL` at boot | An **empty** `DEEPSEEK_BASE_URL` (or `DEEPSEEK_SEARCH_BASE_URL`) is exported. The harness parses it with `new URL()`, and an empty override is not the same as no override. Leave the line commented out in `.env`; the entrypoint drops empty values and logs `dsh-docker: ignoring empty …` so the profile boots. |
+| Agent shell commands fail with `SandboxUnavailableError` / "sandbox is unavailable" | Neither confinement backend can run on this host. Landlock needs Linux 5.13+, `bubblewrap` needs unprivileged user namespaces. Run with `-e DSH_PERMISSION_MODE=danger-full-access` to execute unconfined (this also turns approvals off), or give the container `--cap-add SYS_ADMIN` so `bwrap` can create its namespace. Check with `docker exec <name> sh -c 'bwrap --version'` and `uname -r`. |
+| Shell in the container runs as `node`; the agent cannot install system packages | The image runs as uid 1000. Use `docker exec -u root -it <name> bash` for a one-off root shell, or start the container with `--user root -e HOME=/home/node` (`./docker/run.sh --root`). See [Running as root](#running-as-root). |
 | `docker build` fails with `resolve : lstat docker: no such file or directory` | The `docker` CLI is a **snap**, which is confined to your home directory and cannot read a build context under `/opt` or `/tmp`. Build from a copy inside `$HOME` (`cp -a . ~/dsh-build && cd ~/dsh-build && docker build -f docker/Dockerfile .`), or invoke the unconfined binary directly (`/snap/docker/current/bin/docker build -f docker/Dockerfile .`) after linking the buildx plugin into `~/.docker/cli-plugins`. |

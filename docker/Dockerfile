@@ -81,6 +81,7 @@ RUN set -eux; \
       make \
       g++ \
       pkg-config \
+      musl-tools \
     ; \
     rm -rf /var/lib/apt/lists/*
 
@@ -127,6 +128,15 @@ RUN --mount=type=cache,id=pnpm-store-${TARGETARCH},target=/pnpm/store,sharing=lo
 FROM deps AS build
 
 RUN pnpm run build
+
+# `pnpm run build` invokes the repository script with --host-addon-only, which
+# skips every non Node-API artifact. The Linux sandbox chain needs the statically
+# linked `landlock-run` launcher (`native/system/packages/<platform>/bin/`), and
+# without it `sandbox-local` has no usable runner and fails closed — every agent
+# shell command would be refused. Build the complete native set as well.
+RUN set -eux; \
+    pnpm exec tsx native/system/scripts/build.ts; \
+    test -x "native/system/packages/linux-$(node -p 'process.arch')/bin/landlock-run"
 
 # ── runtime-base: the published image's userland ────────────────────────────
 # A separate stage so `--target runtime-base` can validate the base image and
@@ -199,6 +209,7 @@ RUN set -eux; \
       ripgrep \
       fd-find \
       bat \
+      bubblewrap \
       python3 \
       python3-venv \
       python3-pip \
