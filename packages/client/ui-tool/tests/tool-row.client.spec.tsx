@@ -1,4 +1,6 @@
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 // @vitest-environment jsdom
+import { contextMenuHook } from '@deepseek-ai/dsh-client-test-runtime'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useDisclosure } from '@deepseek-ai/dsh-client-ui-chat/src/client/chat/use-disclosure.ts'
 import { cleanup, fireEvent, render } from '@testing-library/react'
@@ -148,9 +150,9 @@ describe('tool-call-model', () => {
   })
 
   it('exposes filePath for path/file_path args and skips URL-only reads', () => {
-    expect(toolRowModel('read', running({ name: 'read', argsRaw: '{"path":"src/a.ts"}' })).filePath).toBe('src/a.ts')
-    expect(toolRowModel('write', running({ name: 'write', argsRaw: '{"file_path":"src/a.ts"}' })).filePath).toBe('src/a.ts')
-    expect(toolRowModel('edit', running({ name: 'edit', argsRaw: '{"file_path":"src/a.ts"}' })).filePath).toBe('src/a.ts')
+    expect(toolRowModel('read', result({ call: { name: 'read', argsRaw: '{"path":"src/a.ts"}' } })).filePath).toBe('src/a.ts')
+    expect(toolRowModel('write', result({ call: { name: 'write', argsRaw: '{"file_path":"src/a.ts"}' } })).filePath).toBe('src/a.ts')
+    expect(toolRowModel('edit', result({ call: { name: 'edit', argsRaw: '{"file_path":"src/a.ts"}' } })).filePath).toBe('src/a.ts')
     expect(toolRowModel('web_fetch', running({ name: 'web_fetch', argsRaw: '{"url":"https://example.com"}' })).filePath)
       .toBeUndefined()
     expect(toolRowModel('bash', running()).filePath).toBeUndefined()
@@ -164,6 +166,32 @@ describe('tool-call-model', () => {
     expect(toolRowModel('read', running({ name: 'read', argsRaw: '{"path":"/etc/hosts"}' }), cwd).summary).toBe('/etc/hosts')
     expect(toolRowModel('bash', running({ argsRaw: '{"command":"pwd"}' }), cwd).summary).toBe('pwd')
     expect(toolRowModel('read', running({ name: 'read', argsRaw: '{"path":"/Users/u/ws/a.md"}' }), '').summary).toBe('/Users/u/ws/a.md')
+  })
+
+  it.each(['read', 'write', 'edit', 'read_image'].flatMap(name => [false, true].map(nested => ({ name, nested }))))('opens $name nested=$nested at its recorded target after later directory changes without relabeling it', ({ name, nested }) => {
+    const block = result({ ...(nested ? { parentCallId: 'outer' } : {}), call: { name, argsRaw: '{"file_path":"note.txt"}' }, meta: { path: '/workspace/b/note.txt' } })
+    for (const cwd of ['/workspace/a', '/workspace/c']) {
+      const model = toolRowModel(name, block, cwd)
+      expect(model.filePath).toBe('/workspace/b/note.txt')
+      expect(model.summary).toBe('note.txt')
+      const openFile = vi.fn()
+      const view = render(<GenericToolCard
+        getFileTriggerProps={() => ({})} useDisclosure={useDisclosure} phase="result" callId="c1" toolName={name} block={block} cwd={cwd} openFile={openFile} loadImage={vi.fn(async () => '')} t={t} />)
+      fireEvent.click(view.getByText('note.txt'))
+      expect(openFile).toHaveBeenCalledWith('/workspace/b/note.txt')
+      view.unmount()
+    }
+  })
+
+  it('keeps old root results usable and waits for recorded targets before opening relative pending or nested calls', () => {
+    const call = { name: 'read', argsRaw: '{"file_path":"note.txt"}' }
+    for (const meta of [undefined, null, [], { path: 7 }, { path: 'relative.txt' }]) {
+      expect(toolRowModel('read', result({ call, meta }), '/original').filePath).toBe('note.txt')
+    }
+    expect(toolRowModel('read', running(call), '/original').filePath).toBeUndefined()
+    expect(toolRowModel('read', result({ call, parentCallId: 'outer' }), '/original').filePath).toBeUndefined()
+    expect(toolRowModel('read', result({ call, isError: true }), '/original').filePath).toBeUndefined()
+    expect(toolRowModel('read', running({ name: 'read', argsRaw: '{"file_path":"/absolute/note.txt"}' })).filePath).toBe('/absolute/note.txt')
   })
 
   it('abbreviates leftover POSIX home paths after cwd relativization', () => {
@@ -304,6 +332,28 @@ describe('ToolRow', () => {
     variant: 'bash' as const, icon: <i data-testid="tool-icon" />, title: 'Bash',
     summary: 'List files', bodyRaw: '{"a":1}', state: 'ok' as const,
   }
+
+  it('declares file and URL menus without losing line numbers or toggling the row', () => {
+    const open = vi.fn(), openFile = vi.fn()
+    const view = render(<ToolRow fileContextMenuProps={contextMenuHook(open)().getTriggerProps({ kind: 'file', value: { sessionId: 'original' as SessionId, path: '/workspace/file.ts', line: 42 } })} {...rowProps} variant="read" summary="file.ts:42" filePath="/workspace/file.ts" filePathLine={42} onOpenFile={openFile} />)
+    const file = view.getByRole('button', { name: 'file.ts:42' })
+    file.getBoundingClientRect = () => new DOMRect(10, 20, 100, 20)
+    fireEvent.contextMenu(file, { clientX: 30, clientY: 40 })
+    fireEvent.keyDown(file, { key: 'F10', shiftKey: true })
+    expect(open.mock.calls).toEqual([
+      [{ kind: 'file', value: { sessionId: 'original', path: '/workspace/file.ts', line: 42 } }, { x: 30, y: 40 }],
+      [{ kind: 'file', value: { sessionId: 'original', path: '/workspace/file.ts', line: 42 } }, { x: 10, y: 40 }],
+    ])
+    expect(view.container.querySelector('[aria-expanded]')?.getAttribute('aria-expanded')).toBe('false')
+    expect(openFile).not.toHaveBeenCalled()
+    view.rerender(<ToolRow urlContextMenuProps={contextMenuHook(open)().getTriggerProps({ kind: 'url', value: { url: 'https://example.com?q=1#part' } })} {...rowProps} summary="Website" href="https://example.com?q=1#part" />)
+    const link = view.getByRole('link')
+    fireEvent.contextMenu(link, { clientX: 40, clientY: 50 })
+    expect(open).toHaveBeenLastCalledWith({ kind: 'url', value: { url: 'https://example.com?q=1#part' } }, { x: 40, y: 50 })
+    fireEvent.keyDown(link, { key: 'F10', shiftKey: true })
+    expect(open).toHaveBeenLastCalledWith({ kind: 'url', value: { url: 'https://example.com?q=1#part' } }, { x: 0, y: 0 })
+    expect(view.container.querySelector('[aria-expanded]')?.getAttribute('aria-expanded')).toBe('false')
+  })
 
   it('renders leading icon, title and summary while collapsed', () => {
     const view = render(<ToolRow {...rowProps} />)
@@ -533,12 +583,14 @@ describe('ToolRow', () => {
 
 describe('GenericToolCard', () => {
   const props = (toolName: string, block: StartedToolCall | ToolResultNode): GenericToolCardProps => ({
+    getFileTriggerProps: () => ({}),
     loadImage: vi.fn(() => Promise.reject(new Error('not used'))),
     useDisclosure, callId: 'c1', toolName, ...('kind' in block ? { phase: 'result' as const, block: block } : { phase: block.phase, block: block }), openFile: vi.fn(), t,
   })
 
   it('renders the classified variant row from the frozen slice', () => {
-    const view = render(<GenericToolCard {...props('bash', result())} />)
+    const view = render(<GenericToolCard {...props('bash', result())}
+      getFileTriggerProps={() => ({})} />)
     expect(view.getByText('运行命令')).toBeTruthy()
     expect(view.getByText('List files')).toBeTruthy()
     expect(view.container.querySelector('[data-variant="bash"]')).not.toBeNull()
@@ -552,7 +604,8 @@ describe('GenericToolCard', () => {
       content: [{ type: 'text', text: 'failed' }],
       isError: true,
     })
-    const view = render(<GenericToolCard {...props(toolName, failed)} />)
+    const view = render(<GenericToolCard {...props(toolName, failed)}
+      getFileTriggerProps={() => ({})} />)
     const root = view.container.querySelector(`[data-tool="${toolName}"]`)!
     expect(root.querySelector('[data-disclosure-row] > :first-child svg')).not.toBeNull()
     expect(root.querySelector('[data-state]')).toBeNull()
@@ -560,7 +613,8 @@ describe('GenericToolCard', () => {
 
   it('unknown tools land on the others variant titled Tool call', () => {
     const view = render(
-      <GenericToolCard {...props('custom_tool', running({ name: 'custom_tool', argsRaw: '{"note":"x"}' }))} />,
+      <GenericToolCard {...props('custom_tool', running({ name: 'custom_tool', argsRaw: '{"note":"x"}' }))}
+        getFileTriggerProps={() => ({})} />,
     )
     expect(view.getByText('工具调用')).toBeTruthy()
     expect(view.container.querySelector('[data-variant="others"]')).not.toBeNull()
@@ -572,7 +626,8 @@ describe('GenericToolCard', () => {
       <GenericToolCard {...props('edit', running({
         name: 'edit',
         argsRaw: '{"file_path":"src/x.ts","old_string":"before","new_string":"after"}',
-      }))} />,
+      }))}
+      getFileTriggerProps={() => ({})} />,
     )
     expect(view.getByText('编辑')).toBeTruthy()
     expect(view.getByText('src/x.ts')).toBeTruthy()
@@ -585,7 +640,8 @@ describe('GenericToolCard', () => {
       <GenericToolCard {...props('write', running({
         name: 'write',
         argsRaw: '{"file_path":"src/x.ts","content":"hello"}',
-      }))} />,
+      }))}
+      getFileTriggerProps={() => ({})} />,
     )
     expect(view.getByText('写入')).toBeTruthy()
     expect(view.getByText('src/x.ts')).toBeTruthy()
@@ -595,20 +651,23 @@ describe('GenericToolCard', () => {
 
   it('passes the owner inspect callback through to the expanded row pill', () => {
     const inspect = vi.fn()
-    const view = render(<GenericToolCard {...props('bash', result())} inspect={inspect} />)
+    const view = render(<GenericToolCard {...props('bash', result())} inspect={inspect}
+      getFileTriggerProps={() => ({})} />)
     fireEvent.click(view.getByRole('button', { name: /运行命令/ }))
     fireEvent.click(view.getByText('查看'))
     expect(inspect).toHaveBeenCalledTimes(1)
   })
 
   it('file-path summary click reaches openFile; bash summary does not', () => {
-    const file = props('read', running({ name: 'read', argsRaw: '{"path":"src/x.ts"}' }))
-    const fileView = render(<GenericToolCard {...file} />)
+    const file = props('read', result({ call: { name: 'read', argsRaw: '{"path":"src/x.ts"}' } }))
+    const fileView = render(<GenericToolCard {...file}
+      getFileTriggerProps={() => ({})} />)
     fireEvent.click(fileView.getByText('src/x.ts'))
     expect(file.openFile).toHaveBeenCalledWith('src/x.ts')
 
     const bash = props('bash', result())
-    const bashView = render(<GenericToolCard {...bash} />)
+    const bashView = render(<GenericToolCard {...bash}
+      getFileTriggerProps={() => ({})} />)
     fireEvent.click(bashView.getByText('List files'))
     expect(bash.openFile).not.toHaveBeenCalled()
   })
@@ -622,7 +681,8 @@ describe('GenericToolCard', () => {
       isError: true,
       error: { name: 'AutoReviewDeniedError', code: 'AUTO_REVIEW_DENIED', reason: '  scope\r\nwas not authorized  ' },
     })
-    const view = render(<GenericToolCard {...props('mystery', denied)} />)
+    const view = render(<GenericToolCard {...props('mystery', denied)}
+      getFileTriggerProps={() => ({})} />)
     expect(view.getByText('Auto review 已拒绝')).toBeTruthy()
     fireEvent.click(view.getByRole('button'))
     expect(view.getByText('工具未执行。原因：scope was not authorized')).toBeTruthy()

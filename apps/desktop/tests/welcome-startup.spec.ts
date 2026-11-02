@@ -87,6 +87,7 @@ vi.mock('electron', () => ({
   net: { fetch: vi.fn() },
   nativeTheme: state.nativeTheme,
   session: { defaultSession: {
+    on: vi.fn(),
     setPermissionCheckHandler: vi.fn(), setPermissionRequestHandler: vi.fn(), webRequest: { onBeforeSendHeaders: vi.fn() },
   } },
   protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
@@ -102,6 +103,7 @@ vi.mock('electron', () => ({
 vi.mock('../src/tray.ts', () => ({ DesktopTray: class { relabel() {} dispose() {} } }))
 
 vi.mock('../src/paths.ts', () => ({ resolveDesktopPaths: () => ({ profile: '/profile' }) }))
+vi.mock('../src/settings.ts', () => ({ readDesktopSettings: () => ({ updates: { allowTestAuthPopupWindow: false } }) }))
 vi.mock('../src/login-shell-environment.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../src/login-shell-environment.ts')>(),
   readDesktopLoginShellEnvironment: async (base: NodeJS.ProcessEnv) => ({ environment: base, failures: [] }),

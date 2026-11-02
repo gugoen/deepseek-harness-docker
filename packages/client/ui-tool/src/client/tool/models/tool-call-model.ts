@@ -1,13 +1,14 @@
 /**
  * Pure row-model derivation for tool summary rows: variant classification,
  * one-line summary, expansion-time body input, and flattened result output
- * from the frozen call slice. Input material comes from the call ARGUMENTS;
- * output and error material from the settled result node. A supported terminal
+ * from the frozen call slice. Labels keep the call arguments; navigation,
+ * output, and errors use the settled result. A supported terminal
  * call gets its expanded body from `terminalCardModel` instead.
  */
 import type { ToolArgs, ToolCallBlock, ToolResultNode } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { LocaleKeysOf } from '@deepseek-ai/dsh-client-ui-slots'
-import { abbreviateHomePath, relativizeToCwd } from '@deepseek-ai/dsh-util-workspace-path'
+import { abbreviateHomePath, isAbsoluteWorkspacePath, relativizeToCwd } from '@deepseek-ai/dsh-util-workspace-path'
+import { recordedAbsolutePath } from './recorded-path.ts'
 
 export type { ToolCallBlock } from '@deepseek-ai/dsh-client-ui-chat/client'
 
@@ -58,6 +59,7 @@ const TOOL_VARIANTS: Record<string, ToolRowVariant> = {
   glob: 'search',
   write: 'write',
   edit: 'edit',
+  apply_patch: 'edit',
   run_code: 'code',
   cordis_package_inspect: 'read',
   cordis_runtime_inspect: 'read',
@@ -72,6 +74,7 @@ const TOOL_VARIANTS: Record<string, ToolRowVariant> = {
 
 /** Tool-owned titles that refine a generic row variant without replacing it. */
 const TOOL_TITLE_KEYS: Record<string, ToolTitleKey> = {
+  apply_patch: 'tool.title.applyPatch',
   cordis_package_inspect: 'tool.title.inspect',
   cordis_runtime_inspect: 'tool.title.inspect',
   cordis_run: 'tool.title.runCordis',
@@ -86,6 +89,8 @@ const TOOL_TITLE_KEYS: Record<string, ToolTitleKey> = {
   update_goal: 'tool.title.updateGoal',
   schedule_create: 'tool.title.createSchedule',
   schedule_list: 'tool.title.listSchedules',
+  schedule_view: 'tool.title.viewSchedule',
+  schedule_edit: 'tool.title.editSchedule',
   schedule_delete: 'tool.title.deleteSchedule',
   schedule_update: 'tool.title.updateSchedule',
   cordis_inspect_list: 'tool.title.inspectProviders',
@@ -145,10 +150,9 @@ export interface ToolRowModel {
   /** Generic rows retain the wire tool name; available arguments append their summary. */
   summary: string
   /**
-   * Filesystem path from args (`path` / `file_path`) when the row is a file
-   * tool; absent for URL reads and non-file tools. A `file_path` argument
-   * supplies it at every stage once its string is complete. The chat view
-   * resolves relative values against the session cwd before opening.
+   * Operation-time absolute result path for file rows. Old results without
+   * location metadata retain their argument fallback; running relative paths
+   * stay unavailable until their result identifies the target.
    */
   filePath: string | undefined
   /** Original argument JSON retained for expansion-time body formatting. */
@@ -304,12 +308,21 @@ export function toolRowModel(toolName: string, block: ToolCallBlock, cwd?: strin
   const titleKey = toolTitleKey(toolName)
   const done = 'kind' in block
   const argsRaw = done ? block.call?.argsRaw ?? '' : block.phase === 'start' ? block.argsRaw : null
+  // Result metadata marks a settled call that did not finish every requested effect.
+  const stopped = done && typeof block.meta === 'object' && block.meta !== null
+    && !Array.isArray(block.meta) && (block.meta as Record<string, unknown>).stopped === true
+  const primary = argumentSummary(variant, block.args, cwd, home)
+  const argumentPath = primary.filePath ?? (argsRaw === null ? undefined : deriveFilePath(variant, argsRaw))
+  const recordedPath = done ? recordedAbsolutePath(block.meta, 'path') : undefined
+  const canUseArgumentPath = argumentPath !== undefined
+    && (isAbsoluteWorkspacePath(argumentPath) || done && !block.isError && block.parentCallId === undefined)
+  const filePath = argumentPath === undefined ? undefined
+    : recordedPath ?? (canUseArgumentPath ? argumentPath : undefined)
   const state: ToolRowState = !done ? block.phase === 'preparing' ? 'preparing' : 'running'
     : block.error?.code === 'interrupted' ? 'stopped'
-      : block.isError ? 'error' : 'ok'
-  const primary = argumentSummary(variant, block.args, cwd, home)
+      : block.isError || stopped ? 'error' : 'ok'
   // The argument view serves every stage; the raw text is the fallback when it carries nothing useful.
-  const base = primary.summary !== '' || argsRaw === null ? primary.summary
+  const base = toolName === 'apply_patch' ? '' : primary.summary !== '' || argsRaw === null ? primary.summary
     : argsRaw === '' ? block.callId
       : abbreviateHomePath(relativizeToCwd(deriveSummary(variant, argsRaw), cwd), home)
   const summary = [titleKey === 'tool.title.generic' ? toolName : '', base].filter(Boolean).join(' · ')
@@ -323,7 +336,7 @@ export function toolRowModel(toolName: string, block: ToolCallBlock, cwd?: strin
     variant,
     titleKey,
     summary,
-    filePath: primary.filePath ?? (argsRaw === null ? undefined : deriveFilePath(variant, argsRaw)),
+    filePath,
     bodyRaw,
     output,
     errorSummary,
