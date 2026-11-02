@@ -12,7 +12,7 @@
 # Usage: ./docker/test/smoke-test.sh [IMAGE] [HOST_PORT]
 set -uo pipefail
 
-IMAGE="${1:-deepseek-harness-web:0.2.1-alpha.1}"
+IMAGE="${1:-deepseek-harness-web:0.2.2-alpha.2}"
 HOST_PORT="${2:-3080}"
 CONTAINER="dsh-smoke-$$"
 COOKIE_JAR="$(mktemp)"

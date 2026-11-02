@@ -4,11 +4,11 @@ A self-contained Docker image for the DeepSeek Harness Web GUI, built from this
 repository's source. It ships the common Linux tooling the agent and its sandbox
 need, and it is reachable from a non-local IP.
 
-- Harness version: `0.2.1-alpha.1` (whatever `package.json` in this checkout says)
+- Harness version: `0.2.2-alpha.2` (whatever `package.json` in this checkout says)
 - Architectures: `linux/amd64`, `linux/arm64` (and anything else
-  `node:22-bookworm-slim` supports) — everything compiles inside the target
+  `node:24-bookworm-slim` supports) — everything compiles inside the target
   image, so no cross-compilation flags are involved
-- Base image: `node:22-bookworm-slim` (Debian 12)
+- Base image: `node:24-bookworm-slim` (Debian 12)
 
 中文文档见 [README.zh.md](README.zh.md)。
 
@@ -94,7 +94,7 @@ docker run -d --name dsh-web \
   -e DEEPSEEK_API_KEY=sk-... \
   -v "$PWD":/workspace \
   -v dsh-home:/home/node/.dsh \
-  deepseek-harness-web:0.2.1-alpha.1
+  deepseek-harness-web:0.2.2-alpha.2
 ```
 
 ## Deploying the prebuilt package
@@ -103,11 +103,11 @@ A built image is exported to `docker/dist/` as a loadable archive plus its
 checksum:
 
 ```sh
-docker load < docker/dist/deepseek-harness-web_0.2.1-alpha.1_amd64.tar.gz
+docker load < docker/dist/deepseek-harness-web_0.2.2-alpha.2_amd64.tar.gz
 sha256sum -c docker/dist/SHA256SUMS.txt   # from inside docker/dist
 docker run -d --name dsh-web -p 3080:3080 \
   -e DEEPSEEK_API_KEY=sk-... -v dsh-home:/home/node/.dsh \
-  deepseek-harness-web:0.2.1-alpha.1
+  deepseek-harness-web:0.2.2-alpha.2
 ```
 
 The archive is architecture-specific. Copy the repository to the arm64 machine
@@ -238,7 +238,7 @@ Set the model credentials through the container environment instead of the GUI.
 The agent needs no settings write to call a model:
 
 ```sh
-docker run ... -e DEEPSEEK_API_KEY=sk-... deepseek-harness-web:0.2.1-alpha.1
+docker run ... -e DEEPSEEK_API_KEY=sk-... deepseek-harness-web:0.2.2-alpha.2
 ```
 
 Only the settings *pages* are gated; the composer's model picker keeps working.
@@ -257,7 +257,7 @@ Only the settings *pages* are gated; the composer's model picker keeps working.
 Directly with Docker:
 
 ```sh
-docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.1-alpha.1 .
+docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-alpha.2 .
 docker buildx build --platform linux/arm64 -f docker/Dockerfile -t dsh-web:arm64 --load .
 ```
 
@@ -272,8 +272,8 @@ the multi-stage build ships only `/app` and the tooling userland.
 Build on an arm64 machine — that is the fastest path and the truest test:
 
 ```sh
-docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.1-alpha.1 .
-./docker/test/smoke-test.sh deepseek-harness-web:0.2.1-alpha.1
+docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-alpha.2 .
+./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-alpha.2
 ```
 
 Cross-building `linux/arm64` from `linux/amd64` also works, but runs the whole
@@ -294,9 +294,9 @@ resolve for whatever platform the build targets.
 
 | Argument | Default | Purpose |
 | --- | --- | --- |
-| `NODE_IMAGE` | `node:22-bookworm-slim` | Base image for every stage |
+| `NODE_IMAGE` | `node:24-bookworm-slim` | Base image for every stage |
 | `NPM_REGISTRY` | `https://registry.npmmirror.com` | npm registry used during the build; use `https://registry.npmjs.org` if the mirror is incomplete |
-| `DEBIAN_MIRROR` | empty (base image sources) | apt mirror root, e.g. `https://mirrors.tuna.tsinghua.edu.cn`. Set it when `deb.debian.org` is unreachable; both `apt-get update` and the pnpm/npm installs already retry transient resolver failures. |
+| `DEBIAN_MIRROR` | empty (base image sources) | apt mirror root, e.g. `http://mirrors.aliyun.com`. Use `http://`: the base image carries no CA store before the first `apt-get install ca-certificates`, so an `https://` mirror fails with "No system certificates available". Set it when `deb.debian.org` is unreachable; both `apt-get update` and the pnpm/npm installs already retry transient resolver failures. It is a build-time accelerator only — the published image keeps the base image's own Debian sources. |
 | `PYTHON_REQUIREMENTS` | empty | Requirements file (path inside the repository) installed into `/opt/dsh-python`; empty ships only Debian's `python3`. |
 | `PIP_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple` | Package index used by that install. |
 | `PYTHON_EXTRA_PACKAGES` | empty | Extra apt packages for the runtime image, e.g. `build-essential`. |
@@ -336,9 +336,9 @@ mount that directory instead — it is the same format.
 ## Using the image as a sandbox
 
 ```sh
-docker run --rm -it -v "$PWD":/workspace deepseek-harness-web:0.2.1-alpha.1 bash
+docker run --rm -it -v "$PWD":/workspace deepseek-harness-web:0.2.2-alpha.2 bash
 # inside: ll, get, curl, wget, vim, git, rg, fd, bat, jq, tmux, htop, dig, nc, python3, pip, ...
-docker run --rm deepseek-harness-web:0.2.1-alpha.1 ll /workspace
+docker run --rm deepseek-harness-web:0.2.2-alpha.2 ll /workspace
 ```
 
 `ll` and `get` are real executables (not only aliases), so they also work in
@@ -360,7 +360,7 @@ or by hand:
 docker run --name dsh-web -p 3080:3080 \
   --user root -e HOME=/home/node \
   -v dsh-home:/home/node/.dsh \
-  deepseek-harness-web:0.2.1-alpha.1
+  deepseek-harness-web:0.2.2-alpha.2
 ```
 
 With Compose, set `DSH_USER=root` in `docker/.env`; the file ships
@@ -431,7 +431,7 @@ W=/opt/software/flowai-gp-v4/warehouse/flowai-wh-python
 docker run -d --name dsh-web -p 3080:3080 \
   -v "$W:$W:ro" -e DSH_PYTHON_VENV="$W/.venv" \
   -e DEEPSEEK_API_KEY=sk-... \
-  deepseek-harness-web:0.2.1-alpha.1
+  deepseek-harness-web:0.2.2-alpha.2
 ```
 
 The entrypoint activates the environment before starting the harness: its `bin`
@@ -472,7 +472,7 @@ find "$W/.venv/lib" -name '*.so' -print0 \
   | xargs -0 -n1 objdump -T 2>/dev/null \
   | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
 # glibc inside the image
-docker run --rm deepseek-harness-web:0.2.1-alpha.1 ldd --version | head -1
+docker run --rm deepseek-harness-web:0.2.2-alpha.2 ldd --version | head -1
 ```
 
 If the first is above the second, rebuild the environment inside the container
@@ -505,7 +505,7 @@ exactly why mounting exists.
 
 ```sh
 # the image's own python3
-./docker/test/smoke-test.sh deepseek-harness-web:0.2.1-alpha.1
+./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-alpha.2
 
 # a mounted environment, end to end through the real entrypoint
 ./docker/test/python-mount-test.sh --venv /opt/.../flowai-wh-python/.venv
@@ -518,7 +518,7 @@ node --test docker/test/python-runtime.test.mjs
 ## Verifying an image
 
 ```sh
-./docker/test/smoke-test.sh deepseek-harness-web:0.2.1-alpha.1
+./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-alpha.2
 ```
 
 The script starts a container, waits for its health check, then asserts *over a

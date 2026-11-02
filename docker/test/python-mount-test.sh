@@ -17,7 +17,7 @@
 # container path.
 set -uo pipefail
 
-IMAGE="deepseek-harness-web:0.2.1-alpha.1"
+IMAGE="deepseek-harness-web:0.2.2-alpha.2"
 VENV="${DSH_PYTHON_VENV:-}"
 STAGE_FROM=""
 STAGE_TO=""
@@ -29,7 +29,7 @@ usage() {
 Usage: python-mount-test.sh --venv <dir> [options]
 
   --venv <dir>            host virtual environment to mount (or $DSH_PYTHON_VENV)
-  --image <tag>           image under test (default: deepseek-harness-web:0.2.1-alpha.1)
+  --image <tag>           image under test (default: deepseek-harness-web:0.2.2-alpha.2)
   --modules <a,b,c>       modules whose import the container must prove
   --all                   import every top-level module the environment declares
   --stage-from <dir>      original host root that the runtime cannot read

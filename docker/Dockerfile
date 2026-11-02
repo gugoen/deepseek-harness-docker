@@ -21,11 +21,11 @@
 #      architecture the build runs on.
 #
 # Build from the repository root:
-#   docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.1-alpha.1 .
+#   docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-alpha.2 .
 # Build for another architecture:
 #   docker buildx build --platform linux/arm64 -f docker/Dockerfile -t dsh-web:arm64 .
 
-ARG NODE_IMAGE=node:22-bookworm-slim
+ARG NODE_IMAGE=node:24-bookworm-slim
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 # Optional Debian mirror root, e.g. https://mirrors.tuna.tsinghua.edu.cn .
 # Empty keeps the base image's own sources. Reachability of deb.debian.org is
@@ -54,6 +54,7 @@ ARG DEBIAN_MIRROR
 ARG DSH_CLIENT_COMMIT_HASH=0000000
 
 ENV DEBIAN_FRONTEND=noninteractive \
+    SOURCES_BACKUP=/tmp/debian.sources.mirror \
     CI=true \
     ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
@@ -65,6 +66,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN set -eux; \
     if [ -n "${DEBIAN_MIRROR}" ]; then \
       mirror="${DEBIAN_MIRROR%/}"; \
+      cp /etc/apt/sources.list.d/debian.sources "${SOURCES_BACKUP}" 2>/dev/null || true; \
+      cp /etc/apt/sources.list "${SOURCES_BACKUP}.list" 2>/dev/null || true; \
       sed -i "s|http://deb.debian.org|${mirror}|g; s|http://security.debian.org|${mirror}|g" \
         /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
     fi; \
@@ -83,6 +86,8 @@ RUN set -eux; \
       pkg-config \
       musl-tools \
     ; \
+    if [ -f "${SOURCES_BACKUP}" ]; then mv "${SOURCES_BACKUP}" /etc/apt/sources.list.d/debian.sources; fi; \
+    if [ -f "${SOURCES_BACKUP}.list" ]; then mv "${SOURCES_BACKUP}.list" /etc/apt/sources.list; fi; \
     rm -rf /var/lib/apt/lists/*
 
 # Registry and retry policy live in the user `.npmrc`: pnpm ignores the
@@ -97,7 +102,7 @@ ENV PATH=/pnpm/bin:/pnpm:${PATH}
 RUN set -eux; \
     printf 'registry=%s\nfetch-retries=5\nfetch-retry-maxtimeout=120000\n' "${NPM_REGISTRY}" > /root/.npmrc; \
     for attempt in 1 2 3 4 5; do \
-      if npm install --global pnpm@11.7.0; then break; fi; \
+      if npm install --global pnpm@11.28.5; then break; fi; \
       echo "pnpm install attempt ${attempt} failed; retrying" >&2; sleep 5; \
     done; \
     pnpm --version; \
@@ -127,13 +132,17 @@ RUN --mount=type=cache,id=pnpm-store-${TARGETARCH},target=/pnpm/store,sharing=lo
 # ── build: native addon, host/client bundles, and the Web frontend dist ─────
 FROM deps AS build
 
-RUN pnpm run build
+# `--scope artifacts` emits the native addon, every library bundle, and the Web
+# dist, and writes the client build record. The default `pnpm run build` also
+# type-checks the aggregate test/script programs, which the image does not ship.
+RUN pnpm run build:artifacts
 
-# `pnpm run build` invokes the repository script with --host-addon-only, which
-# skips every non Node-API artifact. The Linux sandbox chain needs the statically
-# linked `landlock-run` launcher (`native/system/packages/<platform>/bin/`), and
-# without it `sandbox-local` has no usable runner and fails closed — every agent
-# shell command would be refused. Build the complete native set as well.
+# The repository's build script invokes `build:native-system` with
+# --host-addon-only, which skips every non Node-API artifact. The Linux sandbox
+# chain needs the statically linked `landlock-run` launcher
+# (`native/system/packages/<platform>/bin/`); without it `sandbox-local` has no
+# usable runner and fails closed — every agent shell command would be refused.
+# Build the complete native set as well.
 RUN set -eux; \
     pnpm exec tsx native/system/scripts/build.ts; \
     test -x "native/system/packages/linux-$(node -p 'process.arch')/bin/landlock-run"
@@ -151,7 +160,8 @@ ARG DEBIAN_MIRROR
 # runtime stage that consumes them, so changing them does not invalidate the
 # expensive apt layer here.
 ARG PYTHON_EXTRA_PACKAGES
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    SOURCES_BACKUP=/tmp/debian.sources.mirror
 
 # Common Linux tooling for interactive use of the sandbox: transfer
 # (curl/wget/get), editors (vim/nano), paging and text tools, archives,
@@ -159,6 +169,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN set -eux; \
     if [ -n "${DEBIAN_MIRROR}" ]; then \
       mirror="${DEBIAN_MIRROR%/}"; \
+      cp /etc/apt/sources.list.d/debian.sources "${SOURCES_BACKUP}" 2>/dev/null || true; \
+      cp /etc/apt/sources.list "${SOURCES_BACKUP}.list" 2>/dev/null || true; \
       sed -i "s|http://deb.debian.org|${mirror}|g; s|http://security.debian.org|${mirror}|g" \
         /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
     fi; \
@@ -216,6 +228,8 @@ RUN set -eux; \
       python3-dev \
       ${PYTHON_EXTRA_PACKAGES} \
     ; \
+    if [ -f "${SOURCES_BACKUP}" ]; then mv "${SOURCES_BACKUP}" /etc/apt/sources.list.d/debian.sources; fi; \
+    if [ -f "${SOURCES_BACKUP}.list" ]; then mv "${SOURCES_BACKUP}.list" /etc/apt/sources.list; fi; \
     rm -rf /var/lib/apt/lists/*; \
     ln -sf /usr/bin/fdfind /usr/local/bin/fd; \
     ln -sf /usr/bin/batcat /usr/local/bin/bat; \
@@ -230,7 +244,7 @@ ENV PATH=/home/node/.local/share/pnpm/bin:/home/node/.local/share/pnpm:${PATH}
 RUN set -eux; \
     printf 'registry=%s\nfetch-retries=5\nfetch-retry-maxtimeout=120000\n' "${NPM_REGISTRY}" > /home/node/.npmrc; \
     for attempt in 1 2 3 4 5; do \
-      if npm install --global pnpm@11.7.0; then break; fi; \
+      if npm install --global pnpm@11.28.5; then break; fi; \
       echo "pnpm install attempt ${attempt} failed; retrying" >&2; sleep 5; \
     done; \
     pnpm --version
@@ -247,7 +261,7 @@ ARG PIP_INDEX_URL
 LABEL org.opencontainers.image.title="DeepSeek Harness Web UI" \
       org.opencontainers.image.description="Self-hosted DeepSeek Harness Web GUI with common Linux tooling, reachable from non-local IPs." \
       org.opencontainers.image.source="https://github.com/deepseek-ai/deepseek-harness" \
-      org.opencontainers.image.version="0.2.1-alpha.1" \
+      org.opencontainers.image.version="0.2.2-alpha.2" \
       org.opencontainers.image.licenses="MIT"
 
 ENV LANG=C.UTF-8 \

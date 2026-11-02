@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-IMAGE_TAG="deepseek-harness-web:0.2.1-alpha.1"
+IMAGE_TAG="deepseek-harness-web:0.2.2-alpha.2"
 ARCH="native"
 NPM_REGISTRY="https://registry.npmmirror.com"
 DEBIAN_MIRROR=""
@@ -31,7 +31,7 @@ usage() {
 Usage: build.sh [options]
 
   --arch <native|amd64|arm64|both>   architectures to build (default: native)
-  --tag <image:tag>                  image tag (default: deepseek-harness-web:0.2.1-alpha.1)
+  --tag <image:tag>                  image tag (default: deepseek-harness-web:0.2.2-alpha.2)
   --push                             push the built image(s) to a registry
   --load                             load a single-architecture build into Docker (default)
   --registry <host/namespace>        prefix for --push, e.g. registry.example.com/team

@@ -13,7 +13,7 @@
 # when the browser is on another machine.
 set -euo pipefail
 
-IMAGE="deepseek-harness-web:0.2.1-alpha.1"
+IMAGE="deepseek-harness-web:0.2.2-alpha.2"
 HOST_PORT=3080
 CONTAINER_NAME="dsh-web"
 WORKSPACE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,7 +28,7 @@ usage() {
   cat <<'EOF'
 Usage: run.sh [options]
 
-  --image <tag>            image to run (default: deepseek-harness-web:0.2.1-alpha.1)
+  --image <tag>            image to run (default: deepseek-harness-web:0.2.2-alpha.2)
   --port <host-port>       host port to publish (default: 3080)
   --name <container>       container name (default: dsh-web)
   --workspace <dir>        directory mounted at /workspace (default: repository root)
