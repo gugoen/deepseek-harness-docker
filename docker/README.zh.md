@@ -3,7 +3,7 @@
 基于本仓库源码构建的 DeepSeek Harness Web GUI 镜像。镜像内置了常用 Linux 基础命令，
 并且可以被**非本地 IP** 访问。
 
-- Harness 版本：`0.2.2-alpha.2`（与本次签出的 `package.json` 一致）
+- Harness 版本：`0.2.2-rc.1`（与本次签出的 `package.json` 一致）
 - 支持架构：`linux/amd64`、`linux/arm64`（以及 `node:24-bookworm-slim` 支持的其他架构）
   —— 所有产物都在目标架构镜像内编译，不涉及交叉编译参数
 - 基础镜像：`node:24-bookworm-slim`（Debian 12）
@@ -88,7 +88,7 @@ docker run -d --name dsh-web \
   -e DEEPSEEK_API_KEY=sk-... \
   -v "$PWD":/workspace \
   -v dsh-home:/home/node/.dsh \
-  deepseek-harness-web:0.2.2-alpha.2
+  deepseek-harness-web:0.2.2-rc.1
 ```
 
 ## 使用预构建部署包
@@ -96,11 +96,11 @@ docker run -d --name dsh-web \
 构建好的镜像会导出到 `docker/dist/`，包含可直接 load 的归档和校验和：
 
 ```sh
-docker load < docker/dist/deepseek-harness-web_0.2.2-alpha.2_amd64.tar.gz
+docker load < docker/dist/deepseek-harness-web_0.2.2-rc.1_amd64.tar.gz
 cd docker/dist && sha256sum -c SHA256SUMS.txt
 docker run -d --name dsh-web -p 3080:3080 \
   -e DEEPSEEK_API_KEY=sk-... -v dsh-home:/home/node/.dsh \
-  deepseek-harness-web:0.2.2-alpha.2
+  deepseek-harness-web:0.2.2-rc.1
 ```
 
 该归档与架构绑定。arm64 场景请把仓库拷到 arm64 机器上就地构建，不要把 amd64 归档
@@ -221,7 +221,7 @@ ssh -L 3080:127.0.0.1:3080 user@<服务器IP>
 改用容器环境变量下发模型凭据，不必经过 GUI——调用模型本身不需要写设置：
 
 ```sh
-docker run ... -e DEEPSEEK_API_KEY=sk-... deepseek-harness-web:0.2.2-alpha.2
+docker run ... -e DEEPSEEK_API_KEY=sk-... deepseek-harness-web:0.2.2-rc.1
 ```
 
 被门禁挡住的只有设置**页面**，输入框里的模型选择器照常可用。
@@ -240,7 +240,7 @@ docker run ... -e DEEPSEEK_API_KEY=sk-... deepseek-harness-web:0.2.2-alpha.2
 直接用 Docker：
 
 ```sh
-docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-alpha.2 .
+docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-rc.1 .
 docker buildx build --platform linux/arm64 -f docker/Dockerfile -t dsh-web:arm64 --load .
 ```
 
@@ -254,8 +254,8 @@ provider 与文档/渲染引擎（`@openai/codex`、`@anthropic-ai/claude-agent-
 推荐**在 arm64 机器上直接构建**，这是最快、也最能反映真实结果的路径：
 
 ```sh
-docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-alpha.2 .
-./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-alpha.2
+docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-rc.1 .
+./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-rc.1
 ```
 
 也可以从 `linux/amd64` 交叉构建 `linux/arm64`，但整条 `pnpm install` + TypeScript +
@@ -281,6 +281,21 @@ Dockerfile 中没有任何与架构绑定的步骤：基础镜像、apt 包列�
 | `PIP_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple` | 上述安装使用的包索引。 |
 | `PYTHON_EXTRA_PACKAGES` | 空 | 运行镜像额外安装的 apt 包，例如 `build-essential`。 |
 | `DSH_CLIENT_COMMIT_HASH` | `0000000` | 嵌入浏览器产物的公开 commit 值；在没有 `.git` 的源码快照中可填真实哈希以便识别版本 |
+
+### 不在 npm 上的依赖
+
+`xlsx` 0.20.x 只发布在 SheetJS 自己的 CDN 上，内网构建机访问不到。tarball
+内置在 `docker/vendor/xlsx-0.20.3.tgz`，由
+[docker/patch-vendored-deps.mjs](patch-vendored-deps.mjs) 在**镜像构建过程中**
+把 manifest 和 lockfile 的 specifier 改写成它，因此仓库里的 `pnpm-lock.yaml`、
+`pnpm-workspace.yaml` 保持原样。这一点很重要：lockfile 会随每次上游依赖更新
+而变化，本地改它会让每次 `git pull` 都冲突。
+
+- 该 tarball 是二进制文件，可能没有被 git 跟踪——分发部署包时要一并带上。
+- 它的 `sha512` 必须与 `pnpm-lock.yaml` 里的 `integrity` 一致。
+- 上游升级 `xlsx` 时，同时替换 tarball 和脚本顶部的常量。
+- 如果构建机能访问该 CDN，这套机制可以完全去掉：删除 `docker/vendor/` 和
+  `RUN node docker/patch-vendored-deps.mjs` 那一行即可。
 
 ## 环境变量
 
@@ -316,9 +331,9 @@ Dockerfile 中没有任何与架构绑定的步骤：基础镜像、apt 包列�
 ## 当作沙箱使用
 
 ```sh
-docker run --rm -it -v "$PWD":/workspace deepseek-harness-web:0.2.2-alpha.2 bash
+docker run --rm -it -v "$PWD":/workspace deepseek-harness-web:0.2.2-rc.1 bash
 # 容器内：ll、get、curl、wget、vim、git、rg、fd、bat、jq、tmux、htop、dig、nc、python3、pip ...
-docker run --rm deepseek-harness-web:0.2.2-alpha.2 ll /workspace
+docker run --rm deepseek-harness-web:0.2.2-rc.1 ll /workspace
 ```
 
 `ll` 和 `get` 是真实可执行文件（不只是别名），因此在非交互式 shell、
@@ -339,7 +354,7 @@ docker run --rm deepseek-harness-web:0.2.2-alpha.2 ll /workspace
 docker run --name dsh-web -p 3080:3080 \
   --user root -e HOME=/home/node \
   -v dsh-home:/home/node/.dsh \
-  deepseek-harness-web:0.2.2-alpha.2
+  deepseek-harness-web:0.2.2-rc.1
 ```
 
 用 Compose 时，在 `docker/.env` 里设 `DSH_USER=root`（compose 文件里已经写了
@@ -404,7 +419,7 @@ W=/opt/software/flowai-gp-v4/warehouse/flowai-wh-python
 docker run -d --name dsh-web -p 3080:3080 \
   -v "$W:$W:ro" -e DSH_PYTHON_VENV="$W/.venv" \
   -e DEEPSEEK_API_KEY=sk-... \
-  deepseek-harness-web:0.2.2-alpha.2
+  deepseek-harness-web:0.2.2-rc.1
 ```
 
 entrypoint 会在启动 Harness 之前激活该环境：把它的 `bin` 前置到 `PATH`、导出
@@ -441,7 +456,7 @@ find "$W/.venv/lib" -name '*.so' -print0 \
   | xargs -0 -n1 objdump -T 2>/dev/null \
   | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
 # 镜像内的 glibc
-docker run --rm deepseek-harness-web:0.2.2-alpha.2 ldd --version | head -1
+docker run --rm deepseek-harness-web:0.2.2-rc.1 ldd --version | head -1
 ```
 
 如果前者高于后者，请在容器内重建该环境（例如
@@ -470,7 +485,7 @@ requirements 会带来数百 MB——也正是「挂载」存在的意义。
 
 ```sh
 # 镜像自带的 python3
-./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-alpha.2
+./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-rc.1
 
 # 走真实 entrypoint 端到端验证挂载的环境
 ./docker/test/python-mount-test.sh --venv /opt/.../flowai-wh-python/.venv
@@ -483,7 +498,7 @@ node --test docker/test/python-runtime.test.mjs
 ## 验证镜像
 
 ```sh
-./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-alpha.2
+./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-rc.1
 ```
 
 脚本会启动容器、等待健康检查通过，然后**通过非回环地址**断言：Harness 返回 401

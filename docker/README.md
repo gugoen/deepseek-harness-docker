@@ -4,7 +4,7 @@ A self-contained Docker image for the DeepSeek Harness Web GUI, built from this
 repository's source. It ships the common Linux tooling the agent and its sandbox
 need, and it is reachable from a non-local IP.
 
-- Harness version: `0.2.2-alpha.2` (whatever `package.json` in this checkout says)
+- Harness version: `0.2.2-rc.1` (whatever `package.json` in this checkout says)
 - Architectures: `linux/amd64`, `linux/arm64` (and anything else
   `node:24-bookworm-slim` supports) — everything compiles inside the target
   image, so no cross-compilation flags are involved
@@ -94,7 +94,7 @@ docker run -d --name dsh-web \
   -e DEEPSEEK_API_KEY=sk-... \
   -v "$PWD":/workspace \
   -v dsh-home:/home/node/.dsh \
-  deepseek-harness-web:0.2.2-alpha.2
+  deepseek-harness-web:0.2.2-rc.1
 ```
 
 ## Deploying the prebuilt package
@@ -103,11 +103,11 @@ A built image is exported to `docker/dist/` as a loadable archive plus its
 checksum:
 
 ```sh
-docker load < docker/dist/deepseek-harness-web_0.2.2-alpha.2_amd64.tar.gz
+docker load < docker/dist/deepseek-harness-web_0.2.2-rc.1_amd64.tar.gz
 sha256sum -c docker/dist/SHA256SUMS.txt   # from inside docker/dist
 docker run -d --name dsh-web -p 3080:3080 \
   -e DEEPSEEK_API_KEY=sk-... -v dsh-home:/home/node/.dsh \
-  deepseek-harness-web:0.2.2-alpha.2
+  deepseek-harness-web:0.2.2-rc.1
 ```
 
 The archive is architecture-specific. Copy the repository to the arm64 machine
@@ -238,7 +238,7 @@ Set the model credentials through the container environment instead of the GUI.
 The agent needs no settings write to call a model:
 
 ```sh
-docker run ... -e DEEPSEEK_API_KEY=sk-... deepseek-harness-web:0.2.2-alpha.2
+docker run ... -e DEEPSEEK_API_KEY=sk-... deepseek-harness-web:0.2.2-rc.1
 ```
 
 Only the settings *pages* are gated; the composer's model picker keeps working.
@@ -257,7 +257,7 @@ Only the settings *pages* are gated; the composer's model picker keeps working.
 Directly with Docker:
 
 ```sh
-docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-alpha.2 .
+docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-rc.1 .
 docker buildx build --platform linux/arm64 -f docker/Dockerfile -t dsh-web:arm64 --load .
 ```
 
@@ -272,8 +272,8 @@ the multi-stage build ships only `/app` and the tooling userland.
 Build on an arm64 machine — that is the fastest path and the truest test:
 
 ```sh
-docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-alpha.2 .
-./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-alpha.2
+docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-rc.1 .
+./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-rc.1
 ```
 
 Cross-building `linux/arm64` from `linux/amd64` also works, but runs the whole
@@ -301,6 +301,24 @@ resolve for whatever platform the build targets.
 | `PIP_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple` | Package index used by that install. |
 | `PYTHON_EXTRA_PACKAGES` | empty | Extra apt packages for the runtime image, e.g. `build-essential`. |
 | `DSH_CLIENT_COMMIT_HASH` | `0000000` | Public commit value embedded in browser artifacts; set it to a real hash to make builds from a `.git`-less snapshot identify themselves |
+
+### Dependencies that are not on npm
+
+`xlsx` 0.20.x is published only on SheetJS's own CDN, which an intranet build
+host cannot reach. The tarball lives in `docker/vendor/xlsx-0.20.3.tgz`, and
+[docker/patch-vendored-deps.mjs](patch-vendored-deps.mjs) rewrites the manifest
+and lockfile specifier to it **inside the build**, so the repository's
+`pnpm-lock.yaml` and `pnpm-workspace.yaml` stay untouched. Keeping it out of the
+lockfile matters: that file changes with every upstream dependency bump, and a
+local edit there would conflict on each `git pull`.
+
+- The tarball is binary and may be untracked in git — copy it along with the
+  rest of the deployment package.
+- Its `sha512` must match the `integrity` in `pnpm-lock.yaml`.
+- When upstream moves to a different `xlsx` version, replace the tarball and the
+  constants at the top of the patch script together.
+- A build host that *can* reach the CDN needs none of this: delete
+  `docker/vendor/` and the `RUN node docker/patch-vendored-deps.mjs` line.
 
 ## Environment variables
 
@@ -337,9 +355,9 @@ mount that directory instead — it is the same format.
 ## Using the image as a sandbox
 
 ```sh
-docker run --rm -it -v "$PWD":/workspace deepseek-harness-web:0.2.2-alpha.2 bash
+docker run --rm -it -v "$PWD":/workspace deepseek-harness-web:0.2.2-rc.1 bash
 # inside: ll, get, curl, wget, vim, git, rg, fd, bat, jq, tmux, htop, dig, nc, python3, pip, ...
-docker run --rm deepseek-harness-web:0.2.2-alpha.2 ll /workspace
+docker run --rm deepseek-harness-web:0.2.2-rc.1 ll /workspace
 ```
 
 `ll` and `get` are real executables (not only aliases), so they also work in
@@ -361,7 +379,7 @@ or by hand:
 docker run --name dsh-web -p 3080:3080 \
   --user root -e HOME=/home/node \
   -v dsh-home:/home/node/.dsh \
-  deepseek-harness-web:0.2.2-alpha.2
+  deepseek-harness-web:0.2.2-rc.1
 ```
 
 With Compose, set `DSH_USER=root` in `docker/.env`; the file ships
@@ -432,7 +450,7 @@ W=/opt/software/flowai-gp-v4/warehouse/flowai-wh-python
 docker run -d --name dsh-web -p 3080:3080 \
   -v "$W:$W:ro" -e DSH_PYTHON_VENV="$W/.venv" \
   -e DEEPSEEK_API_KEY=sk-... \
-  deepseek-harness-web:0.2.2-alpha.2
+  deepseek-harness-web:0.2.2-rc.1
 ```
 
 The entrypoint activates the environment before starting the harness: its `bin`
@@ -473,7 +491,7 @@ find "$W/.venv/lib" -name '*.so' -print0 \
   | xargs -0 -n1 objdump -T 2>/dev/null \
   | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
 # glibc inside the image
-docker run --rm deepseek-harness-web:0.2.2-alpha.2 ldd --version | head -1
+docker run --rm deepseek-harness-web:0.2.2-rc.1 ldd --version | head -1
 ```
 
 If the first is above the second, rebuild the environment inside the container
@@ -506,7 +524,7 @@ exactly why mounting exists.
 
 ```sh
 # the image's own python3
-./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-alpha.2
+./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-rc.1
 
 # a mounted environment, end to end through the real entrypoint
 ./docker/test/python-mount-test.sh --venv /opt/.../flowai-wh-python/.venv
@@ -519,7 +537,7 @@ node --test docker/test/python-runtime.test.mjs
 ## Verifying an image
 
 ```sh
-./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-alpha.2
+./docker/test/smoke-test.sh deepseek-harness-web:0.2.2-rc.1
 ```
 
 The script starts a container, waits for its health check, then asserts *over a

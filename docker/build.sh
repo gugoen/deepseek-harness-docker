@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-IMAGE_TAG="deepseek-harness-web:0.2.2-alpha.2"
+IMAGE_TAG="deepseek-harness-web:0.2.2-rc.1"
 ARCH="native"
 NPM_REGISTRY="https://registry.npmmirror.com"
 DEBIAN_MIRROR=""
@@ -31,7 +31,7 @@ usage() {
 Usage: build.sh [options]
 
   --arch <native|amd64|arm64|both>   architectures to build (default: native)
-  --tag <image:tag>                  image tag (default: deepseek-harness-web:0.2.2-alpha.2)
+  --tag <image:tag>                  image tag (default: deepseek-harness-web:0.2.2-rc.1)
   --push                             push the built image(s) to a registry
   --load                             load a single-architecture build into Docker (default)
   --registry <host/namespace>        prefix for --push, e.g. registry.example.com/team
@@ -77,6 +77,19 @@ case "${NATIVE_ARCH}" in
   aarch64|arm64) NATIVE_ARCH="arm64" ;;
 esac
 
+# The image build rewrites dependencies that are only published outside npm
+# (SheetJS `xlsx` lives on its own CDN) to tarballs vendored under
+# docker/vendor/ — see docker/patch-vendored-deps.mjs. Those binaries may be
+# untracked in git, so check them before a long build starts instead of failing
+# at the install step.
+VENDORED_TARBALL="${SCRIPT_DIR}/vendor/xlsx-0.20.3.tgz"
+if [ ! -f "${VENDORED_TARBALL}" ]; then
+  echo "build.sh: missing ${VENDORED_TARBALL}" >&2
+  echo "build.sh: xlsx 0.20.x is only published on cdn.sheetjs.com; copy the vendored copy" >&2
+  echo "build.sh: into docker/vendor/ (docker/patch-vendored-deps.mjs names the file), then re-run." >&2
+  exit 2
+fi
+
 case "${ARCH}" in
   native) PLATFORMS="linux/${NATIVE_ARCH}" ;;
   amd64) PLATFORMS="linux/amd64" ;;
@@ -100,18 +113,40 @@ else
   OUTPUT=(--load)
 fi
 
+# buildx is optional for a native build. Detect it in a form that survives
+# `set -o pipefail`: a failing command substitution inside an assignment aborts
+# the whole script, and discarding its stderr makes that exit silent.
+BUILDX_VERSION=""
+if BUILDX_VERSION="$(docker buildx version 2>&1)"; then
+  :
+else
+  BUILDX_VERSION=""
+fi
+
 # `--load` for a non-native platform needs the docker-container driver, because
 # the default "docker" driver builds only for the host architecture.
-DRIVER="$(docker buildx inspect --bootstrap 2>/dev/null | awk -F': *' '/^Driver/{print $2; exit}')"
-NEEDS_CONTAINER_DRIVER=0
-if [ "${PLATFORMS}" != "linux/${NATIVE_ARCH}" ] && [ "${DRIVER}" != "docker-container" ]; then
-  NEEDS_CONTAINER_DRIVER=1
+DRIVER=""
+if [ -n "${BUILDX_VERSION}" ]; then
+  if INSPECT_OUTPUT="$(docker buildx inspect --bootstrap 2>&1)"; then
+    DRIVER="$(printf '%s\n' "${INSPECT_OUTPUT}" | awk -F': *' '/^Driver/{print $2; exit}')"
+  else
+    echo "build.sh: warning: 'docker buildx inspect --bootstrap' failed:" >&2
+    printf '%s\n' "${INSPECT_OUTPUT}" | sed 's/^/  /' >&2
+  fi
 fi
-if [ "${NEEDS_CONTAINER_DRIVER}" = "1" ]; then
-  cat >&2 <<EOF
-build.sh: building ${PLATFORMS} with the "${DRIVER:-unknown}" buildx driver will not work.
 
-Create a container driver builder once, then re-run this script:
+CROSS_BUILD=0
+if [ "${PLATFORMS}" != "linux/${NATIVE_ARCH}" ]; then
+  CROSS_BUILD=1
+fi
+
+if [ "${CROSS_BUILD}" = "1" ]; then
+  if [ -z "${BUILDX_VERSION}" ] || [ "${DRIVER}" != "docker-container" ]; then
+    cat >&2 <<EOF
+build.sh: building ${PLATFORMS} from ${NATIVE_ARCH} needs buildx with the
+"docker-container" driver (detected: ${DRIVER:-no usable buildx}).
+
+Install the plugin if it is missing, then create a container builder once:
 
   docker buildx create --name dsh-multiarch --driver docker-container --use --bootstrap
   docker buildx inspect --bootstrap
@@ -120,28 +155,86 @@ Note: a non-native build runs the whole toolchain under emulation. Build on the
 target machine (or an arm64 CI runner) when you can — that is both faster and a
 truer test of the arm64 result.
 EOF
-  exit 3
+    exit 3
+  fi
 fi
 
 echo "==> building ${TARGET} for ${PLATFORMS} (npm registry: ${NPM_REGISTRY})"
-# shellcheck disable=SC2086
-docker buildx build \
-  --file "${SCRIPT_DIR}/Dockerfile" \
-  --platform "${PLATFORMS}" \
-  --tag "${TARGET}" \
-  --build-arg "NPM_REGISTRY=${NPM_REGISTRY}" \
-  --build-arg "DEBIAN_MIRROR=${DEBIAN_MIRROR}" \
-  --build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}" \
-  --build-arg "PYTHON_REQUIREMENTS=${PYTHON_REQUIREMENTS}" \
-  --build-arg "PYTHON_EXTRA_PACKAGES=${PYTHON_EXTRA_PACKAGES}" \
-  ${NO_CACHE} \
-  "${OUTPUT[@]}" \
-  "${ROOT_DIR}"
+if [ -n "${BUILDX_VERSION}" ] && [ -n "${DRIVER}" ]; then
+  # shellcheck disable=SC2086
+  docker buildx build \
+    --file "${SCRIPT_DIR}/Dockerfile" \
+    --platform "${PLATFORMS}" \
+    --tag "${TARGET}" \
+    --build-arg "NPM_REGISTRY=${NPM_REGISTRY}" \
+    --build-arg "DEBIAN_MIRROR=${DEBIAN_MIRROR}" \
+    --build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}" \
+    --build-arg "PYTHON_REQUIREMENTS=${PYTHON_REQUIREMENTS}" \
+    --build-arg "PYTHON_EXTRA_PACKAGES=${PYTHON_EXTRA_PACKAGES}" \
+    ${NO_CACHE} \
+    "${OUTPUT[@]}" \
+    "${ROOT_DIR}"
+else
+  # No usable buildx. Two fallbacks, cheapest first:
+  #   1. `DOCKER_BUILDKIT=1 docker build` — Docker 19.03–20.10 ship BuildKit in
+  #      the CLI, so this works without the plugin.
+  #   2. The classic builder over a copy of the Dockerfile whose only
+  #      BuildKit-only instruction (`RUN --mount=type=cache`) is dropped. Docker
+  #      23 and newer refuse fallback 1 with "the buildx component is missing",
+  #      and the cache mount is the Dockerfile's only BuildKit feature.
+  # A native build needs no --platform; a push becomes a separate `docker push`.
+  echo "build.sh: buildx unavailable; trying 'DOCKER_BUILDKIT=1 docker build'" >&2
+  # shellcheck disable=SC2086
+  if DOCKER_BUILDKIT=1 docker build \
+    --file "${SCRIPT_DIR}/Dockerfile" \
+    --tag "${TARGET}" \
+    --build-arg "NPM_REGISTRY=${NPM_REGISTRY}" \
+    --build-arg "DEBIAN_MIRROR=${DEBIAN_MIRROR}" \
+    --build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}" \
+    --build-arg "PYTHON_REQUIREMENTS=${PYTHON_REQUIREMENTS}" \
+    --build-arg "PYTHON_EXTRA_PACKAGES=${PYTHON_EXTRA_PACKAGES}" \
+    ${NO_CACHE} \
+    "${ROOT_DIR}"; then
+    :
+  else
+    echo "build.sh: BuildKit needs the buildx plugin here; falling back to the classic builder" >&2
+    LEGACY_DOCKERFILE="$(mktemp)"
+    sed 's/^RUN --mount=type=cache[^ ]* /RUN /' "${SCRIPT_DIR}/Dockerfile" > "${LEGACY_DOCKERFILE}"
+    LEGACY_IGNORE_CREATED=0
+    if [ ! -f "${ROOT_DIR}/.dockerignore" ]; then
+      # The classic builder only reads `.dockerignore` at the context root, not
+      # the `<dockerfile>.dockerignore` name BuildKit resolves.
+      cp "${SCRIPT_DIR}/Dockerfile.dockerignore" "${ROOT_DIR}/.dockerignore"
+      LEGACY_IGNORE_CREATED=1
+    fi
+    cleanup_legacy() {
+      rm -f "${LEGACY_DOCKERFILE}"
+      if [ "${LEGACY_IGNORE_CREATED}" = "1" ]; then rm -f "${ROOT_DIR}/.dockerignore"; fi
+    }
+    trap cleanup_legacy EXIT
+    # shellcheck disable=SC2086
+    DOCKER_BUILDKIT=0 docker build \
+      --file "${LEGACY_DOCKERFILE}" \
+      --tag "${TARGET}" \
+      --build-arg "NPM_REGISTRY=${NPM_REGISTRY}" \
+      --build-arg "DEBIAN_MIRROR=${DEBIAN_MIRROR}" \
+      --build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}" \
+      --build-arg "PYTHON_REQUIREMENTS=${PYTHON_REQUIREMENTS}" \
+      --build-arg "PYTHON_EXTRA_PACKAGES=${PYTHON_EXTRA_PACKAGES}" \
+      ${NO_CACHE} \
+      "${ROOT_DIR}"
+    cleanup_legacy
+    trap - EXIT
+    if [ "${MODE}" = "push" ]; then
+      docker push "${TARGET}"
+    fi
+  fi
+fi
 
 if [ -n "${TARBALL_DIR}" ]; then
   mkdir -p "${TARBALL_DIR}"
   SAFE_NAME="$(printf '%s' "${IMAGE_TAG}" | tr '/:' '__')"
-  OUT_FILE="${TARBALL_DIR}/${SAFE_NAME}-${PLATFORMS##*/}.tar.gz"
+  OUT_FILE="${TARBALL_DIR}/${SAFE_NAME}_${PLATFORMS##*/}.tar.gz"
   echo "==> exporting ${TARGET} to ${OUT_FILE}"
   docker save "${TARGET}" | gzip -1 > "${OUT_FILE}"
   echo "==> ${OUT_FILE} ($(du -h "${OUT_FILE}" | cut -f1))"

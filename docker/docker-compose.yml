@@ -9,7 +9,7 @@ name: deepseek-harness
 
 services:
   dsh-web:
-    image: ${DSH_IMAGE:-deepseek-harness-web:0.2.2-alpha.2}
+    image: ${DSH_IMAGE:-deepseek-harness-web:0.2.2-rc.1}
     build:
       context: ..
       dockerfile: docker/Dockerfile

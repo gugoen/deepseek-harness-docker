@@ -21,7 +21,7 @@
 #      architecture the build runs on.
 #
 # Build from the repository root:
-#   docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-alpha.2 .
+#   docker build -f docker/Dockerfile -t deepseek-harness-web:0.2.2-rc.1 .
 # Build for another architecture:
 #   docker buildx build --platform linux/arm64 -f docker/Dockerfile -t dsh-web:arm64 .
 
@@ -125,6 +125,13 @@ ENV npm_config_store_dir=/pnpm/store
 RUN mkdir -p /pnpm/store
 
 COPY . .
+
+# Some dependencies are only published outside npm (SheetJS `xlsx` lives on its
+# own CDN), so an intranet build cannot fetch them. Rewrite those specifiers to
+# the tarballs vendored under docker/vendor/ before installing. The script
+# asserts the text it rewrites, so a manifest or lockfile format change fails
+# the build instead of silently reintroducing a network fetch.
+RUN node docker/patch-vendored-deps.mjs
 
 RUN --mount=type=cache,id=pnpm-store-${TARGETARCH},target=/pnpm/store,sharing=locked \
     pnpm install --frozen-lockfile
@@ -261,7 +268,7 @@ ARG PIP_INDEX_URL
 LABEL org.opencontainers.image.title="DeepSeek Harness Web UI" \
       org.opencontainers.image.description="Self-hosted DeepSeek Harness Web GUI with common Linux tooling, reachable from non-local IPs." \
       org.opencontainers.image.source="https://github.com/deepseek-ai/deepseek-harness" \
-      org.opencontainers.image.version="0.2.2-alpha.2" \
+      org.opencontainers.image.version="0.2.2-rc.1" \
       org.opencontainers.image.licenses="MIT"
 
 ENV LANG=C.UTF-8 \
