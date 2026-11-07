@@ -317,6 +317,7 @@ resolve for whatever platform the build targets.
 | `DSH_HOME` | `/home/node/.dsh` | Harness home: sessions, credentials, cookies, profiles. |
 | `DSH_WEB_EXTRA_ARGS` | unset | Extra arguments appended to `dsh web` (whitespace-separated). |
 | `DSH_TELEMETRY_DISABLED` | unset (`true` in Compose) | Disable the harness's anonymous product telemetry. |
+| `DSH_SANDBOX_FALLBACK` | enabled | Set to `0` to keep the harness's fail-closed sandbox instead of falling back to `danger-full-access` when no backend can run. |
 | `DSH_PYTHON_VENV` | unset | Virtual environment to activate; must be mounted at its original absolute path. `/opt/dsh-python` is used automatically when the image was built with `PYTHON_REQUIREMENTS`. |
 
 ## Persistence
@@ -568,10 +569,23 @@ a trusted network:
 
 The harness keeps its own sandbox around the shell tools. The default
 permission mode is `workspace-write`, enforced by Landlock (modern Linux
-kernels) or `bubblewrap`; this image ships **both** backends. It fails closed:
-if neither can run, the agent's commands are refused rather than silently
-running unconfined. `DSH_PERMISSION_MODE=danger-full-access` turns confinement
-and approvals off — see the troubleshooting row below.
+kernels) or `bubblewrap`; this image ships **both** backends and probes them at
+container start.
+
+Some hosts can run neither: a kernel older than 5.13 has no Landlock, and
+`bubblewrap` needs user namespaces (`user.max_user_namespaces`, which RHEL/CentOS 7
+ships as `0`). Because the harness fails closed there — every agent command
+refused — the entrypoint falls back to `DSH_PERMISSION_MODE=danger-full-access`
+and says so in the startup log. That keeps the container usable at the cost of
+running unconfined **inside** the container, which is already the outer sandbox.
+
+- `DSH_SANDBOX_FALLBACK=0` disables the fallback and restores fail-closed.
+- Setting `DSH_PERMISSION_MODE` yourself always wins over the preflight.
+- To get real confinement on such a host: enable user namespaces
+  (`sysctl -w user.max_user_namespaces=15000`) so `bwrap` works, or move to a
+  Landlock-capable kernel. With an older container runtime whose seccomp profile
+  blocks the Landlock syscalls, `--security-opt seccomp=unconfined` (or a profile
+  that allows `landlock_*`) is the fix.
 
 ## Troubleshooting
 
@@ -587,6 +601,7 @@ and approvals off — see the troubleshooting row below.
 | Plugin install from the GUI fails | `pnpm` is installed in the image but the container needs outbound network access. |
 | `settings are unavailable in this browser` in Settings → Models | The page is not on a loopback address, which is where the harness keeps Host-backed settings (see [Settings require a loopback address](#settings-require-a-loopback-address)). Forward a local port — `netsh interface portproxy` on Windows — and browse `http://127.0.0.1:<port>`, or pass the model credentials through the container environment. |
 | `llm-deepseek … TypeError: Invalid URL` at boot | An **empty** `DEEPSEEK_BASE_URL` (or `DEEPSEEK_SEARCH_BASE_URL`) is exported. The harness parses it with `new URL()`, and an empty override is not the same as no override. Leave the line commented out in `.env`; the entrypoint drops empty values and logs `dsh-docker: ignoring empty …` so the profile boots. |
-| Agent shell commands fail with `SandboxUnavailableError` / "sandbox is unavailable" | Neither confinement backend can run on this host. Landlock needs Linux 5.13+, `bubblewrap` needs unprivileged user namespaces. Run with `-e DSH_PERMISSION_MODE=danger-full-access` to execute unconfined (this also turns approvals off), or give the container `--cap-add SYS_ADMIN` so `bwrap` can create its namespace. Check with `docker exec <name> sh -c 'bwrap --version'` and `uname -r`. |
+| Startup warns "no sandbox backend can run here" | Expected on hosts without Landlock (kernel < 5.13) and with `user.max_user_namespaces = 0`. The entrypoint sets `danger-full-access` so commands still run; set `DSH_SANDBOX_FALLBACK=0` to refuse instead, or enable user namespaces / use a newer kernel for real confinement. |
+| Agent shell commands fail with `SandboxUnavailableError` / "sandbox is unavailable" | This should no longer happen unless `DSH_SANDBOX_FALLBACK=0` or an explicit `DSH_PERMISSION_MODE` asks for confinement on a host that cannot provide it. Check `docker logs` for the preflight diagnostic, `bwrap --version`, and `uname -r`. |
 | Shell in the container runs as `node`; the agent cannot install system packages | The image runs as uid 1000. Use `docker exec -u root -it <name> bash` for a one-off root shell, or start the container with `--user root -e HOME=/home/node` (`./docker/run.sh --root`). See [Running as root](#running-as-root). |
 | `docker build` fails with `resolve : lstat docker: no such file or directory` | The `docker` CLI is a **snap**, which is confined to your home directory and cannot read a build context under `/opt` or `/tmp`. Build from a copy inside `$HOME` (`cp -a . ~/dsh-build && cd ~/dsh-build && docker build -f docker/Dockerfile .`), or invoke the unconfined binary directly (`/snap/docker/current/bin/docker build -f docker/Dockerfile .`) after linking the buildx plugin into `~/.docker/cli-plugins`. |

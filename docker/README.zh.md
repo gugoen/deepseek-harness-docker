@@ -297,6 +297,7 @@ Dockerfile 中没有任何与架构绑定的步骤：基础镜像、apt 包列�
 | `DSH_HOME` | `/home/node/.dsh` | Harness 主目录：会话、凭据、Cookie、profile。 |
 | `DSH_WEB_EXTRA_ARGS` | 未设置 | 追加给 `dsh web` 的额外参数（空格分隔）。 |
 | `DSH_TELEMETRY_DISABLED` | 未设置（Compose 中为 `true`） | 关闭 Harness 的匿名产品遥测。 |
+| `DSH_SANDBOX_FALLBACK` | 启用 | 设为 `0` 时，若没有可用沙箱后端则保持 Harness 的「失败即拒绝」，而不是回退到 `danger-full-access`。 |
 | `DSH_PYTHON_VENV` | 未设置 | 要激活的虚拟环境，必须挂载在其原始绝对路径上。用 `PYTHON_REQUIREMENTS` 构建的镜像会自动使用 `/opt/dsh-python`。 |
 
 ## 数据持久化
@@ -524,10 +525,21 @@ python3 docker/test/check-arm64-packages.py
 ### 命令隔离
 
 Harness 对 shell 工具还有自己的沙箱。默认权限模式是 `workspace-write`，由
-Landlock（较新的 Linux 内核）或 `bubblewrap` 实施；本镜像**两个后端都已内置**。
-它是「失败即拒绝」的：两个后端都跑不起来时，Agent 的命令会被拒绝，而不是悄悄
-在没有隔离的情况下执行。`DSH_PERMISSION_MODE=danger-full-access` 会关闭隔离与
-审批——见下面排错表。
+Landlock（较新的 Linux 内核）或 `bubblewrap` 实施；本镜像**两个后端都已内置**，
+并在容器启动时探测。
+
+有些宿主机两个后端都跑不起来：内核低于 5.13 没有 Landlock，而 `bubblewrap`
+需要非特权 user namespace（`user.max_user_namespaces`，RHEL/CentOS 7 默认为
+`0`）。Harness 在这种情况下是「失败即拒绝」——每条 Agent 命令都会被拒绝——所以
+entrypoint 会自动回退到 `DSH_PERMISSION_MODE=danger-full-access`，并在启动日志里
+说明。这样容器仍可用，代价是在**容器内部**没有命令级隔离（容器本身就是外层沙箱）。
+
+- `DSH_SANDBOX_FALLBACK=0` 可关闭该回退，恢复「失败即拒绝」。
+- 自己显式设置 `DSH_PERMISSION_MODE` 时，优先级高于预检。
+- 想在这种宿主机上拿到真正的隔离：开启 user namespace
+  （`sysctl -w user.max_user_namespaces=15000`）让 `bwrap` 可用，或换用支持
+  Landlock 的内核。若是容器运行时较旧、seccomp 拦了 Landlock 系统调用，则用
+  `--security-opt seccomp=unconfined`（或允许 `landlock_*` 的自定义 profile）。
 
 ## 常见问题
 
@@ -543,6 +555,7 @@ Landlock（较新的 Linux 内核）或 `bubblewrap` 实施；本镜像**两个�
 | 从界面安装插件失败 | 镜像内已装 `pnpm`，但容器需要能访问外网。 |
 | 设置-模型报 `settings are unavailable in this browser` | 页面不在回环地址上，而 Harness 的 Host 设置只在回环页面可用（见 [设置页需要回环地址](#设置页需要回环地址)）。做本地端口转发（Windows 上用 `netsh interface portproxy`）后用 `http://127.0.0.1:<端口>` 访问；或改用容器环境变量下发模型凭据。 |
 | 启动即报 `llm-deepseek … TypeError: Invalid URL` | 导出了**空的** `DEEPSEEK_BASE_URL`（或 `DEEPSEEK_SEARCH_BASE_URL`）。Harness 会用 `new URL()` 解析它，而「空覆盖」不等于「不覆盖」。在 `.env` 里保持该行注释即可；entrypoint 会丢弃空值并打印 `dsh-docker: ignoring empty …`，让 profile 正常启动。 |
-| Agent 执行命令报 `SandboxUnavailableError` / 「sandbox is unavailable」 | 宿主机上两种隔离后端都跑不起来：Landlock 需要 Linux 5.13+，`bubblewrap` 需要允许非特权 user namespace。加 `-e DSH_PERMISSION_MODE=danger-full-access` 可无隔离执行（同时关闭审批）；或者给容器 `--cap-add SYS_ADMIN` 让 `bwrap` 能创建命名空间。可用 `docker exec <容器名> sh -c 'bwrap --version'` 和 `uname -r` 自查。 |
+| 启动日志提示 "no sandbox backend can run here" | 宿主机没有 Landlock（内核 < 5.13）且 `user.max_user_namespaces = 0` 时的正常现象。entrypoint 会自动设为 `danger-full-access` 让命令仍可执行；想改为拒绝可设 `DSH_SANDBOX_FALLBACK=0`，或在宿主机开启 user namespace / 换新内核以恢复真正的隔离。 |
+| Agent 执行命令报 `SandboxUnavailableError` / 「sandbox is unavailable」 | 正常情况下不应再出现；除非你设了 `DSH_SANDBOX_FALLBACK=0`，或在无法提供隔离的宿主机上显式要求了 `workspace-write`。用 `docker logs` 看预检诊断，并检查 `bwrap --version` 与 `uname -r`。 |
 | 容器内 shell 是 `node`、Agent 装不了系统包 | 镜像以 uid 1000 运行。临时 root shell 用 `docker exec -u root -it <容器名> bash`；要整个容器都用 root，启动时加 `--user root -e HOME=/home/node`（即 `./docker/run.sh --root`）。见 [以 root 运行](#以-root-运行)。 |
 | `docker build` 报 `resolve : lstat docker: no such file or directory` | 你的 `docker` CLI 是 **snap** 版本，受限于家目录，读不到 `/opt`、`/tmp` 下的构建上下文。可把仓库复制到家目录再构建（`cp -a . ~/dsh-build && cd ~/dsh-build && docker build -f docker/Dockerfile .`），或直接调用未受限的二进制：把 buildx 插件链接到 `~/.docker/cli-plugins` 后使用 `/snap/docker/current/bin/docker build -f docker/Dockerfile .`。 |

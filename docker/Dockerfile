@@ -280,6 +280,7 @@ COPY --from=build --chown=node:node /app /app
 COPY docker/entrypoint.mjs /usr/local/lib/dsh-docker/entrypoint.mjs
 COPY docker/reverse-proxy.mjs /usr/local/lib/dsh-docker/reverse-proxy.mjs
 COPY docker/container-env.mjs /usr/local/lib/dsh-docker/container-env.mjs
+COPY docker/sandbox-preflight.mjs /usr/local/lib/dsh-docker/sandbox-preflight.mjs
 COPY docker/python-runtime.mjs /usr/local/lib/dsh-docker/python-runtime.mjs
 COPY docker/dsh-docker-entrypoint /usr/local/bin/dsh-docker-entrypoint
 COPY docker/shell/ll /usr/local/bin/ll
@@ -309,6 +310,7 @@ RUN set -eux; \
       /usr/local/lib/dsh-docker/entrypoint.mjs \
       /usr/local/lib/dsh-docker/reverse-proxy.mjs \
       /usr/local/lib/dsh-docker/container-env.mjs \
+      /usr/local/lib/dsh-docker/sandbox-preflight.mjs \
       /usr/local/lib/dsh-docker/python-runtime.mjs \
       /usr/local/bin/dsh-docker-entrypoint \
       /usr/local/bin/ll \

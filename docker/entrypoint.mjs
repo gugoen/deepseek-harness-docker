@@ -22,6 +22,7 @@ import process from 'node:process'
 import { dropEmptyUrlEnv } from './container-env.mjs'
 import { applyPythonRuntime, resolvePythonRuntime } from './python-runtime.mjs'
 import { startReverseProxy } from './reverse-proxy.mjs'
+import { applySandboxMode, planSandboxMode } from './sandbox-preflight.mjs'
 
 /** Path of the built `dsh` bin inside the image. */
 const DSH_BIN = '/app/apps/cli/lib/bin.js'
@@ -39,6 +40,27 @@ function activatePython() {
   if (!runtime.configured) return undefined
   applyPythonRuntime(runtime)
   return `${runtime.version} (${runtime.venv})`
+}
+
+/**
+ * Check that the harness can confine agent commands here, widening the
+ * permission mode when neither sandbox backend can run.
+ * @returns a diagnostic to log, or undefined when the default mode is fine.
+ */
+function resolveSandbox() {
+  const plan = applySandboxMode(planSandboxMode())
+  const reason = plan.kind === 'fallback' || plan.kind === 'unavailable'
+    ? `bwrap: ${plan.bwrap.detail}; landlock: ${plan.landlock.detail}`
+    : undefined
+  if (plan.kind === 'fallback') {
+    return `no sandbox backend can run here (${reason}) — setting DSH_PERMISSION_MODE=${plan.mode}; `
+      + 'agent commands run unconfined inside this container. Set DSH_SANDBOX_FALLBACK=0 to fail closed instead.'
+  }
+  if (plan.kind === 'unavailable') {
+    return `no sandbox backend can run here (${reason}) and DSH_SANDBOX_FALLBACK=0 — `
+      + 'every agent shell command will be refused. Enable user namespaces or use a Landlock-capable kernel.'
+  }
+  return undefined
 }
 
 /**
@@ -223,6 +245,8 @@ try {
   if (droppedEnv.length > 0) {
     process.stdout.write(`dsh-docker: ignoring empty ${droppedEnv.join(', ')}\n`)
   }
+  const sandbox = resolveSandbox()
+  if (sandbox !== undefined) process.stderr.write(`dsh-docker: ${sandbox}\n`)
   const python = activatePython()
   if (python !== undefined) process.stdout.write(`dsh-docker: python ${python}\n`)
   if (command === 'serve') {
